@@ -5,7 +5,13 @@ import {
 } from '../../addons/external-dns/runbook.js';
 
 test('external-dns runbook generate targets the cluster it is installed on', async () => {
-  const md = await externalDnsRunbookGenerate(1, { namespace: 'external-dns', config: {} }, 'east', {}, { spec: {} });
+  const md = await externalDnsRunbookGenerate(
+    1,
+    { namespace: 'external-dns', config: {} },
+    'east',
+    {},
+    { spec: {} }
+  );
   expect(md).toContain('--kube-context $EAST_CONTEXT');
 });
 

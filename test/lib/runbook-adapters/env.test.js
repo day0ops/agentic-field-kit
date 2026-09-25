@@ -91,7 +91,12 @@ test('EnvAdapter.generate excludes hideFromTable exports from the table but keep
   const adapter = new EnvAdapter();
   const exports = [
     { name: 'AWS_REGION', value: 'ap-southeast-1', comment: 'AWS region' },
-    { name: 'INFRA_NAME', value: 'maple', comment: 'Terraform infrastructure name', hideFromTable: true },
+    {
+      name: 'INFRA_NAME',
+      value: 'maple',
+      comment: 'Terraform infrastructure name',
+      hideFromTable: true,
+    },
   ];
   const md = adapter.generate(1, mockSelection, [], exports);
   expect(md).not.toContain('| `INFRA_NAME` |');

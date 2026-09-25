@@ -26,9 +26,16 @@ test('solo-ui runbook omits the Keycloak CA-trust note when OIDC is disabled', a
 });
 
 test('solo-ui runbook cleanup targets the cluster it was installed on (multi-cluster: management on east, relay on west)', () => {
-  const managementMd = soloUiRunbookCleanup({ namespace: 'solo-enterprise', mode: 'management' }, 'east');
-  expect(managementMd).toContain('helm uninstall solo-ui solo-ui-crds -n solo-enterprise --kube-context $EAST_CONTEXT');
+  const managementMd = soloUiRunbookCleanup(
+    { namespace: 'solo-enterprise', mode: 'management' },
+    'east'
+  );
+  expect(managementMd).toContain(
+    'helm uninstall solo-ui solo-ui-crds -n solo-enterprise --kube-context $EAST_CONTEXT'
+  );
 
   const relayMd = soloUiRunbookCleanup({ namespace: 'solo-enterprise', mode: 'relay' }, 'west');
-  expect(relayMd).toContain('helm uninstall solo-relay -n solo-enterprise --kube-context $WEST_CONTEXT');
+  expect(relayMd).toContain(
+    'helm uninstall solo-relay -n solo-enterprise --kube-context $WEST_CONTEXT'
+  );
 });

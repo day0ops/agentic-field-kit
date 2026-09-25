@@ -406,7 +406,9 @@ function _reinsertMermaidBlocks(html, blocks) {
   return blocks.reduce((acc, code, i) => {
     const token = `@@MERMAID_BLOCK_${i}@@`;
     const pre = `<pre class="mermaid">${_escapeMermaid(code)}</pre>`;
-    return acc.includes(`<p>${token}</p>`) ? acc.replace(`<p>${token}</p>`, pre) : acc.replace(token, pre);
+    return acc.includes(`<p>${token}</p>`)
+      ? acc.replace(`<p>${token}</p>`, pre)
+      : acc.replace(token, pre);
   }, html);
 }
 

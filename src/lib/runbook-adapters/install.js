@@ -44,7 +44,6 @@ function deepMerge(target, source) {
   return result;
 }
 
-
 function buildBaseValues(componentName, { istioRepo, istioTag, meshProfile, ns }) {
   switch (componentName) {
     case 'base':
@@ -91,7 +90,9 @@ export class InstallAdapter {
     const istioVersion = mesh.istioVersion || '';
     const istioTag = mesh.image?.tag || (istioVersion ? `${istioVersion}-solo` : '');
     if (!istioTag) return [];
-    return [{ name: 'ISTIO_VERSION', value: istioTag, comment: 'Istio Ambient Helm chart version' }];
+    return [
+      { name: 'ISTIO_VERSION', value: istioTag, comment: 'Istio Ambient Helm chart version' },
+    ];
   }
 
   // Cert/trust material must exist before ANY cluster installs anything (addons included) —
@@ -338,7 +339,8 @@ rm /tmp/agentic-root-ca-key.pem /tmp/agentic-root-ca-cert.pem
       // License is a secret — pass it as a --set-string flag (always shell-expanded) rather
       // than embedding it in the piped values file (wrapped in a quoted heredoc, so a $VAR
       // reference there would never expand).
-      const licenseFlag = comp.name === 'istiod' ? '  --set-string license.value=$ENTERPRISE_ISTIO_LICENSE \\\n' : '';
+      const licenseFlag =
+        comp.name === 'istiod' ? '  --set-string license.value=$ENTERPRISE_ISTIO_LICENSE \\\n' : '';
 
       return `# ${comp.name}
 helm upgrade --install ${release} oci://${helmIstioRepo}/${chart} \\
@@ -566,7 +568,9 @@ ${clusters
       }
       lines.push(`kubectl --context=${ctx} delete namespace istio-system --ignore-not-found=true`);
       if (usesEastwestNamespace) {
-        lines.push(`kubectl --context=${ctx} delete namespace istio-eastwest --ignore-not-found=true`);
+        lines.push(
+          `kubectl --context=${ctx} delete namespace istio-eastwest --ignore-not-found=true`
+        );
       }
       lines.push('```');
       lines.push('');

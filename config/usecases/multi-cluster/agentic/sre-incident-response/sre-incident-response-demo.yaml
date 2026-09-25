@@ -8,7 +8,7 @@ metadata:
     Source code: github.com/day0ops/sre-incident-response-system
 
     Prerequisites (not automated by this usecase - see the design doc's Amendment):
-    create the Entra app registrations for chat-app/agent-gateway/repo-mcp manually (see docs/entra-tenant-setup.md), 
+    create the Entra app registrations for chat-app/agent-gateway/repo-mcp manually (see docs/entra-tenant-setup.md),
     then fill in config/environments/aws-dev.yaml's spec.entra.sreIRS.* placeholders and set the ENTRA_GATEWAY_CLIENT_SECRET / ENTRA_CHAT_CLIENT_SECRET env vars before deploying.
 
 spec:

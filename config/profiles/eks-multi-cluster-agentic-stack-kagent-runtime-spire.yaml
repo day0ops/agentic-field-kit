@@ -512,7 +512,7 @@ spec:
                       profileDescription: "Caps a JWT Authorization Grant exchange to the roles carried in the original Entra assertion (app-role assignments), instead of Keycloak's built-in downscope-assertion-grant-enforcer's hardcoded scope claim, which Entra cannot emit."
                       executorProviderId: downscope-role-enforcer
                       policyName: downscope-role-enforcer-jwt-bearer
-                      policyDescription: "Applies downscope-role-enforcer to JWT Authorization Grant (RFC 7523) token exchanges in this realm."
+                      policyDescription: 'Applies downscope-role-enforcer to JWT Authorization Grant (RFC 7523) token exchanges in this realm.'
                       grantTypes:
                         - 'urn:ietf:params:oauth:grant-type:jwt-bearer'
                       # Must be a DEFAULT (not optional) client scope: gateway-exchange's token

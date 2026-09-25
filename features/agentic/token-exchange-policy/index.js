@@ -306,7 +306,8 @@ export class TokenExchangePolicyFeature extends Feature {
       // policy schema when grantType is JwtBearer (RFC 7523 has no audience/requested-token-type
       // equivalent; Keycloak's JWT Authorization Grant scopes the result via `scope` instead).
       ...(!isJwtBearer && { requestedTokenType: this.requestedTokenType }),
-      ...(!isJwtBearer && this.exchangeAudiences.length > 0 && { audiences: this.exchangeAudiences }),
+      ...(!isJwtBearer &&
+        this.exchangeAudiences.length > 0 && { audiences: this.exchangeAudiences }),
       ...(this.scopes.length > 0 && { scopes: this.scopes }),
       clientAuth: {
         clientId: this.clientId,

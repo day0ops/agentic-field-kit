@@ -321,7 +321,11 @@ export class RunbookBuilder {
     cleanupSections.push(...installCleanup);
     cleanupIndex += installCleanup.length;
 
-    const addonCleanup = await addonAdapter.generateCleanupSections(9, this.selection, cleanupIndex);
+    const addonCleanup = await addonAdapter.generateCleanupSections(
+      9,
+      this.selection,
+      cleanupIndex
+    );
     cleanupSections.push(...addonCleanup);
     cleanupIndex += addonCleanup.length;
 

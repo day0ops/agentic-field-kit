@@ -18,7 +18,9 @@ function _varsTable(vars) {
   return [
     '| Variable | Value | Description |',
     '|----------|-------|-------------|',
-    ...vars.map(v => `| \`${v.name}\` | ${v.value != null ? `\`${v.value}\`` : ''} | ${v.description} |`),
+    ...vars.map(
+      v => `| \`${v.name}\` | ${v.value != null ? `\`${v.value}\`` : ''} | ${v.description} |`
+    ),
   ].join('\n');
 }
 

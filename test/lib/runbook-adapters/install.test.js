@@ -91,8 +91,12 @@ test('InstallAdapter.generate includes Gateway API CRDs install', () => {
 test('InstallAdapter.generate applies Gateway API CRDs on every cluster, not just the current context (CRDs are cluster-scoped)', () => {
   const adapter = new InstallAdapter();
   const md = adapter.generate(4, multiClusterSelection);
-  expect(md).toContain('kubectl --context=$EAST_CONTEXT apply -f https://github.com/kubernetes-sigs/gateway-api');
-  expect(md).toContain('kubectl --context=$WEST_CONTEXT apply -f https://github.com/kubernetes-sigs/gateway-api');
+  expect(md).toContain(
+    'kubectl --context=$EAST_CONTEXT apply -f https://github.com/kubernetes-sigs/gateway-api'
+  );
+  expect(md).toContain(
+    'kubectl --context=$WEST_CONTEXT apply -f https://github.com/kubernetes-sigs/gateway-api'
+  );
 });
 
 test('InstallAdapter.generate includes helm install commands for all non-deferred components', () => {
@@ -199,7 +203,9 @@ test('InstallAdapter.generateCertSetup returns empty for a single-cluster profil
 
 test('InstallAdapter.generateCertSetup appends extra sections (e.g. SPIRE root pre-generation) after cert setup', () => {
   const adapter = new InstallAdapter();
-  const md = adapter.generateCertSetup(5, multiClusterSelection, ['### Generate Independent SPIRE Roots\n\nfoo']);
+  const md = adapter.generateCertSetup(5, multiClusterSelection, [
+    '### Generate Independent SPIRE Roots\n\nfoo',
+  ]);
   expect(md).toContain('Set Up Shared Root of Trust');
   expect(md).toContain('### Generate Independent SPIRE Roots');
   expect(md.indexOf('Set Up Shared Root of Trust')).toBeLessThan(
@@ -209,7 +215,9 @@ test('InstallAdapter.generateCertSetup appends extra sections (e.g. SPIRE root p
 
 test('InstallAdapter.generateCertSetup returns only the extra sections for a single-cluster profile (no cacerts step)', () => {
   const adapter = new InstallAdapter();
-  const md = adapter.generateCertSetup(5, singleClusterSelection, ['### Generate Independent SPIRE Roots\n\nfoo']);
+  const md = adapter.generateCertSetup(5, singleClusterSelection, [
+    '### Generate Independent SPIRE Roots\n\nfoo',
+  ]);
   expect(md).toContain('## Lab 5 — Cluster Bootstrap');
   expect(md).toContain('### Generate Independent SPIRE Roots');
   expect(md).not.toContain('Set Up Shared Root of Trust');
@@ -269,8 +277,12 @@ test('InstallAdapter.generateCleanupSections uninstalls components in reverse of
 test('InstallAdapter.generateCleanupSections uninstalls peering-eastwest from the istio-eastwest namespace, not istio-system', () => {
   const adapter = new InstallAdapter();
   const md = adapter.generateCleanupSections(8, multiClusterSelection, 3)[0];
-  expect(md).toContain('helm uninstall peering-eastwest --kube-context=$EAST_CONTEXT -n istio-eastwest');
-  expect(md).not.toContain('helm uninstall peering-eastwest --kube-context=$EAST_CONTEXT -n istio-system');
+  expect(md).toContain(
+    'helm uninstall peering-eastwest --kube-context=$EAST_CONTEXT -n istio-eastwest'
+  );
+  expect(md).not.toContain(
+    'helm uninstall peering-eastwest --kube-context=$EAST_CONTEXT -n istio-system'
+  );
   expect(md).toContain('kubectl --context=$EAST_CONTEXT delete namespace istio-eastwest');
 });
 

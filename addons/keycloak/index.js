@@ -1030,7 +1030,13 @@ export class KeycloakFeature extends AddonFeature {
     }
 
     for (const policy of realm.clientPolicies || []) {
-      const ok = await this.configureClientPolicy(baseUrl, token, realm.realm, policy, refreshToken);
+      const ok = await this.configureClientPolicy(
+        baseUrl,
+        token,
+        realm.realm,
+        policy,
+        refreshToken
+      );
       if (!ok) realmOk = false;
     }
 
@@ -1831,9 +1837,14 @@ export class KeycloakFeature extends AddonFeature {
       executors: [{ executor: policy.executorProviderId, configuration: {} }],
     };
     profiles = [...profiles.filter(p => p.name !== policy.profileName), entry];
-    return this.kcApi('PUT', `${baseUrl}/admin/realms/${realmName}/client-policies/profiles`, token, {
-      profiles,
-    });
+    return this.kcApi(
+      'PUT',
+      `${baseUrl}/admin/realms/${realmName}/client-policies/profiles`,
+      token,
+      {
+        profiles,
+      }
+    );
   }
 
   async clientProfileExists(baseUrl, token, realmName, profileName) {
@@ -1887,9 +1898,14 @@ export class KeycloakFeature extends AddonFeature {
       profiles: [policy.profileName],
     };
     policies = [...policies.filter(p => p.name !== policy.policyName), entry];
-    return this.kcApi('PUT', `${baseUrl}/admin/realms/${realmName}/client-policies/policies`, token, {
-      policies,
-    });
+    return this.kcApi(
+      'PUT',
+      `${baseUrl}/admin/realms/${realmName}/client-policies/policies`,
+      token,
+      {
+        policies,
+      }
+    );
   }
 
   async clientPolicyEntryExists(baseUrl, token, realmName, policyName) {

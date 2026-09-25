@@ -149,7 +149,12 @@ export class EntraOboPolicyFeature extends Feature {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
-      await this.deleteResource('enterpriseagentgatewaypolicy', this.policyName, this.namespace, context);
+      await this.deleteResource(
+        'enterpriseagentgatewaypolicy',
+        this.policyName,
+        this.namespace,
+        context
+      );
       await this.deleteResource('secret', this.clientSecretName, this.namespace, context);
     }
     this.log(`Entra OBO policy '${this.policyName}' removed`, 'success');

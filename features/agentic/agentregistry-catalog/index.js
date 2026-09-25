@@ -274,7 +274,10 @@ export class AgentregistryCatalogFeature extends Feature {
       // targets, matching the dependency direction -- deleting the MCPServer first
       // fails while a Deployment still references it.
       try {
-        await ArctlHelper.deviceLoginAndExec(['delete', 'deployment', this.serverName], loginOptions);
+        await ArctlHelper.deviceLoginAndExec(
+          ['delete', 'deployment', this.serverName],
+          loginOptions
+        );
       } catch (err) {
         this.log(`agentregistry-catalog deployment cleanup warning: ${err.message}`, 'warn');
       }
