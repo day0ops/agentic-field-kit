@@ -1,0 +1,3 @@
+[submodule "cloud-provisioner/terraform-cloud-provisioner"]
+	path = cloud-provisioner/terraform-cloud-provisioner
+	url = https://github.com/day0ops/terraform-cloud-provisioner
