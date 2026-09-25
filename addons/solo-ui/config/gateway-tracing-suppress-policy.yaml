@@ -1,0 +1,14 @@
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: solo-ui-gateway-no-trace
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    agentic.demo/feature: solo-ui
+spec:
+  selector:
+    matchLabels:
+      istio.io/gateway-name: solo-enterprise-ui-https
+  tracing:
+    - disableSpanReporting: true

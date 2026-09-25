@@ -1,0 +1,51 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: eks-single-cluster-mesh-with-spire
+  description: |
+    Single cluster ambient mesh with SPIRE workload identity attestation
+
+spec:
+  infra: eks-single-cluster
+  environment: aws-dev
+
+  mesh:
+    istioVersion: 1.30.3
+    gatewayApiVersion: v1.5.0
+    profile: ambient
+
+    image:
+      istioRepo: us-docker.pkg.dev/soloio-img/istio
+      helmIstioRepo: us-docker.pkg.dev/soloio-img/istio-helm
+      tag: 1.30.3-solo
+
+    components:
+      - base
+      - name: istiod
+        values:
+          gateways:
+            spire:
+              workloads: true
+          meshConfig:
+            accessLogFile: /dev/stdout
+            defaultConfig:
+              proxyMetadata:
+                ISTIO_META_DNS_CAPTURE: 'true'
+            trustDomain: '{{ cluster.name }}'
+          env:
+            PILOT_ENABLE_IP_AUTOALLOCATE: 'true'
+            PILOT_SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+          pilot:
+            cni:
+              namespace: istio-system
+              enabled: true
+      - cni
+      - name: ztunnel
+        values:
+          spire:
+            enabled: true
+
+  addons:
+    - name: spire
+      phase: pre
+      certMode: self-signed

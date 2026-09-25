@@ -1,0 +1,111 @@
+# Grafana Alloy — Log scraper agent (spoke/remote clusters)
+# Scrapes logs from ambient mesh components and gateway pods only.
+# Pushes to east Loki via global service.
+# Targets: ztunnel, istiod, waypoints, agentgateway data plane + control plane.
+
+alloy:
+  configMap:
+    content: |
+      // Discover all pods across all namespaces
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Relabel: scope to ambient + gateway pods, add metadata labels
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Drop completed/failed pods first
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          regex         = "Succeeded|Failed|Completed"
+          action        = "drop"
+        }
+
+        // Mark ambient mesh components: ztunnel, istiod
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          regex         = "ztunnel|istiod"
+          target_label  = "__tmp_keep"
+          replacement   = "true"
+          action        = "replace"
+        }
+        // Drop agentgateway pods — access logs arrive via OTLP, avoid duplicates in Loki
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex         = "agentgateway-proxy|agentgateway-system"
+          action        = "drop"
+        }
+        // Mark gateway data plane pods (waypoints, east-west gw)
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_gateway_networking_k8s_io_gateway_name"]
+          regex         = ".+"
+          target_label  = "__tmp_keep"
+          replacement   = "true"
+          action        = "replace"
+        }
+        // Drop everything not marked
+        rule {
+          source_labels = ["__tmp_keep"]
+          regex         = "true"
+          action        = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app_name"
+        }
+      }
+
+      // Collect pod logs
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.process.parse.receiver]
+      }
+
+      // Process logs — attempt JSON parse, extract level label
+      loki.process "parse" {
+        forward_to = [loki.write.loki.receiver]
+
+        stage.json {
+          expressions = {
+            level   = "level",
+            message = "msg",
+          }
+        }
+
+        stage.labels {
+          values = {
+            level = "",
+          }
+        }
+      }
+
+      // Write to east Loki via global service
+      loki.write "loki" {
+        endpoint {
+          url = "{{LOKI_PUSH_URL}}"
+        }
+      }
+
+controller:
+  type: daemonset
+
+serviceAccount:
+  create: true

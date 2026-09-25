@@ -1,0 +1,28 @@
+# addons/agentgateway/config/values.yaml
+# Base values — override as needed
+
+# Request dimensions available to EnterpriseAgentgatewayBudget's `subject` map
+# (via a shared ConfigMap the chart renders and copies into every namespace).
+# `model`/`provider` are always built in and don't need an entry here.
+#
+# This is a full override, not an append -- Helm replaces lists wholesale, so
+# the chart's own defaults (group, user, virtualKey) are reproduced here
+# alongside the new `customerEmail` dimension (retail-returns' Stage 6: budget
+# control), rather than being silently dropped for every other demo sharing
+# this gateway.
+budgetDimensions:
+  enabled: true
+  config:
+    hierarchy:
+      - id: group
+        expression: 'coalesce(jwt.group, apiKey.group)'
+        displayName: Group
+      - id: user
+        expression: 'coalesce(apiKey.user, apiKey.name, apiKey.owner, jwt.sub, jwt.email, basicAuth.username, source.identity.namespace + "/" + source.identity.serviceAccount, source.subjectCn)'
+        displayName: User
+      - id: customerEmail
+        expression: 'jwt.email'
+        displayName: Customer email
+    attributes:
+      - id: virtualKey
+        expression: apiKey.id

@@ -1,0 +1,35 @@
+# OTel Collector — Traces (east/full mode)
+# Receives OTLP from local istiod/proxies, gateways (agentgateway).
+# Exports to local Tempo + local Solo UI telemetry collector + local AgentRegistry
+# telemetry collector.
+# Note: cross-cluster traces from west arrive via otel-gateway, not here.
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  exporters:
+    otlp/tempo:
+      endpoint: 'tempo-distributor.{{TELEMETRY_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+    otlp/solo-ui:
+      endpoint: 'solo-enterprise-telemetry-collector.{{SOLO_UI_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+    otlp/agentregistry:
+      endpoint: 'agentregistry-enterprise-telemetry-collector.{{AGENTREGISTRY_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlp/tempo, otlp/solo-ui, otlp/agentregistry]

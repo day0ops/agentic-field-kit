@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-secrets
+  namespace: '{{NAMESPACE}}'
+type: Opaque
+stringData:
+  KC_BOOTSTRAP_ADMIN_USERNAME: '{{ADMIN_USERNAME}}'
+  KC_BOOTSTRAP_ADMIN_PASSWORD: '{{ADMIN_PASSWORD}}'
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: keycloak
+spec:
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: keycloak
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: '{{KEYCLOAK_IMAGE}}'
+          args: ['start']
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: KC_BOOTSTRAP_ADMIN_USERNAME
+                  name: keycloak-secrets
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: KC_BOOTSTRAP_ADMIN_PASSWORD
+                  name: keycloak-secrets
+            - name: KC_HEALTH_ENABLED
+              value: 'true'
+            - name: KC_METRICS_ENABLED
+              value: 'true'
+            - name: KC_LOG_LEVEL
+              value: INFO
+            - name: KC_DB
+              value: postgres
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
+            - name: KC_DB_URL
+              value: jdbc:postgresql://postgres/keycloak
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: KC_HOSTNAME
+              value: '{{HOSTNAME}}'
+            - name: KC_HOSTNAME_STRICT
+              value: 'false'
+            - name: KC_HTTPS_CERTIFICATE_FILE
+              value: /etc/keycloak/tls/tls.crt
+            - name: KC_HTTPS_CERTIFICATE_KEY_FILE
+              value: /etc/keycloak/tls/tls.key
+            - name: KC_HTTPS_PORT
+              value: '8443'
+            - name: KC_HTTP_ENABLED
+              value: 'true'
+            - name: KC_HTTPS_ENABLED
+              value: 'true'
+            - name: KC_HTTP_MANAGEMENT_SCHEME
+              value: http
+
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: tls-cert
+              mountPath: /etc/keycloak/tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            initialDelaySeconds: 250
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            initialDelaySeconds: 500
+            periodSeconds: 30
+          resources:
+            limits:
+              memory: 1Gi
+              cpu: '1'
+            requests:
+              memory: 512Mi
+              cpu: '0.5'
+      volumes:
+        - name: tls-cert
+          secret:
+            secretName: '{{TLS_SECRET_NAME}}'

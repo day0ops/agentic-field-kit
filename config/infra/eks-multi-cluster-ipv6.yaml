@@ -1,0 +1,23 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: eks-multi-cluster-ipv6
+  description: EKS multi-cluster IPv6 clusters (east, west)
+
+spec:
+  name: indigo
+  provider: eks-ipv6
+  environment: aws-dev
+
+  settings:
+    enable_bastion: true
+    enable_dns64: true
+    nodes:
+      desired: 2
+      type: t3.medium
+
+  clusters:
+    - name: east
+      role: workload
+    - name: west
+      role: workload

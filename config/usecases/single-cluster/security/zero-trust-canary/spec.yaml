@@ -1,0 +1,131 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: zero-trust-canary
+  description: Combine deny-all policy, L7 waypoint auth, and traffic shifting for a secure canary deployment
+spec:
+  category: security
+  requires:
+    applications:
+      - name: bookinfo
+        namespace: bookinfo
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+
+  features:
+    - name: gateway
+      description: Create ingress gateway for Bookinfo
+      config:
+        gatewayName: bookinfo
+        namespace: bookinfo
+        gateway:
+          listeners:
+            - name: http
+              hostname: bookinfo.example.com
+              port: 80
+              protocol: HTTP
+              allowedRoutes:
+                namespaces:
+                  from: Same
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: request-routing
+      description: Route traffic to productpage
+      config:
+        routeName: bookinfo
+        namespace: bookinfo
+        gatewayName: bookinfo
+        gatewayNamespace: bookinfo
+        hostname: bookinfo.example.com
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: productpage
+                port: 9080
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: deny-all-policy
+      description: Deny all traffic to bookinfo namespace
+      config:
+        policyName: deny-all
+        namespace: bookinfo
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: waypoint
+      description: Deploy waypoint proxy for reviews service
+      config:
+        waypointName: reviews-waypoint
+        namespace: bookinfo
+        labels:
+          target: service
+          serviceName: reviews
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: authorization-policy
+      description: Allow productpage to access reviews via waypoint
+      config:
+        policyName: allow-productpage-reviews
+        namespace: bookinfo
+        action: ALLOW
+        targetRefs:
+          - kind: Gateway
+            group: gateway.networking.k8s.io
+            name: reviews-waypoint
+        rules:
+          - from:
+              - source:
+                  principals:
+                    - cluster.local/ns/bookinfo/sa/bookinfo-productpage
+            to:
+              - operation:
+                  methods:
+                    - GET
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: traffic-shifting
+      description: Canary traffic 90/10 to reviews v1/v2
+      config:
+        routeName: reviews-canary
+        namespace: bookinfo
+        waypointName: reviews-waypoint
+        rules:
+          - backendRefs:
+              - name: reviews-v1
+                port: 9080
+                weight: 90
+              - name: reviews-v2
+                port: 9080
+                weight: 10
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: bookinfo-accessible
+      description: Verify bookinfo is accessible through zero-trust canary deployment
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: send-request
+          hostname: bookinfo.example.com
+          autoDetectGwAddress: true
+          path: /productpage
+          timeout: 30s
+        - action: verify
+          expect:
+            statusCode: 200

@@ -1,0 +1,29 @@
+# Declarative remote peer Gateway resource for Istio multicluster linking.
+# Applied to each cluster for every remote peer cluster.
+# Reference: https://docs.solo.io/gloo-mesh/latest/ambient/multicluster/install/default/manual/#link-clusters
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: 'istio-remote-peer-{{ peerName }}'
+  namespace: '{{ namespace }}'
+  annotations:
+    gateway.istio.io/service-account: istio-eastwest
+    gateway.istio.io/trust-domain: '{{ trustDomain }}'
+  labels:
+    topology.istio.io/network: '{{ peerName }}'
+spec:
+  addresses:
+    - type: '{{ addressType }}'
+      value: '{{ address }}'
+  gatewayClassName: istio-remote
+  listeners:
+    - name: cross-network
+      port: 15008
+      protocol: HBONE
+      tls:
+        mode: Passthrough
+    - name: xds-tls
+      port: 15012
+      protocol: TLS
+      tls:
+        mode: Passthrough

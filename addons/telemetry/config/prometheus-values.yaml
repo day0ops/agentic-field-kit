@@ -1,0 +1,71 @@
+# kube-prometheus-stack values for Istio Ambient mesh observability
+# Ref: https://docs.solo.io/gloo-mesh/main/setup/observability/prometheus/
+# Ref: https://docs.solo.io/gloo-mesh/main/setup/observability/grafana/
+
+alertmanager:
+  enabled: false
+
+defaultRules:
+  create: false
+
+nodeExporter:
+  enabled: false
+
+kubeStateMetrics:
+  enabled: true
+
+# Disable built-in Kubernetes component scrapers (not relevant for Istio mesh observability)
+kubernetesServiceMonitors:
+  enabled: false
+kubeApiServer:
+  enabled: false
+kubelet:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+coreDns:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  service:
+    type: ClusterIP
+  prometheusSpec:
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    enableRemoteWriteReceiver: true
+    # retention is set via TelemetryFeature config (--set prometheus.prometheusSpec.retention)
+    # Scraping handled by opentelemetry-collector-metrics on each cluster via remote-write.
+    # East cluster: otel-metrics scrapes locally and remote-writes here.
+    # West cluster: otel-metrics scrapes locally and sends via east otel-gateway which remote-writes here.
+    additionalScrapeConfigs: []
+    # REMOVED: istiod, ztunnel, gateway, agentgateway-controlplane scrape jobs.
+    # All now owned by opentelemetry-collector-metrics (standard collector set on both clusters).
+
+grafana:
+  enabled: true
+  # adminUser / adminPassword are injected at install time from GRAFANA_ADMIN_USERNAME
+  # and GRAFANA_ADMIN_PASSWORD via --set-string (see TelemetryFeature.installPrometheusStack).
+  defaultDashboardsEnabled: false
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: '1'
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+      defaultDatasourceEnabled: false
+      # Sidecar watches for ConfigMaps with grafana_datasource=1 and reloads Grafana when found.
+      # The reload API is admin-only; the credentialed reloadURL is injected at install time
+      # via --set-string (see TelemetryFeature.installPrometheusStack).
+      skipReload: false
+      reloadURL: 'http://localhost:3000/api/admin/provisioning/datasources/reload'
+      label: grafana_datasource
+      labelValue: '1'

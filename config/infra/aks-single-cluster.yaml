@@ -1,0 +1,17 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: aks-single-cluster
+  description: Single AKS cluster
+
+spec:
+  provider: aks
+  region: Australia East
+  settings:
+    nodes:
+      desired: 2
+      type: Standard_D2_v2
+
+  clusters:
+    - name: demo
+      role: management

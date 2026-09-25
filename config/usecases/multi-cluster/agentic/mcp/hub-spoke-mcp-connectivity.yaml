@@ -1,0 +1,180 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: hub-spoke-mcp-connectivity
+  description: |
+    Cross-cluster MCP tool access through a hub-spoke agentgateway topology.
+
+    A client talking to the hub cluster reaches an MCP backend that lives entirely on a separate spoke cluster, with no direct network path or shared control plane between the two - the same pattern used to let an AI agent call tools wherever the underlying service actually runs, regardless of which cluster it is deployed to.
+
+    - mcp-server-everything (the MCP backend) runs only on the spoke cluster (west)
+    - The spoke's enterprise agentgateway fronts that backend via an `EnterpriseAgentgatewayBackend`
+    - The hub's enterprise agentgateway (east) reaches the spoke gateway over HBONE/mTLS, addressed through its mesh.internal global service
+    - A client on the east cluster calls MCP tools through the hub gateway, which chains the request through the spoke gateway to reach mcp-server-everything
+
+spec:
+  diagram: |
+    flowchart LR
+      subgraph EAST["east cluster"]
+        Client([MCP Client])
+        Hub[hub-agentgateway-proxy\nagentgateway-proxy]
+      end
+
+      GSvc[spoke-agentgateway-proxy.agentgateway-proxy.mesh.internal]
+
+      subgraph WEST["west cluster"]
+        Spoke[spoke-agentgateway-proxy\nagentgateway-proxy]
+        MCP[mcp-server-everything:3001\nmcp-backend]
+      end
+
+      Client -->|StreamableHTTP| Hub
+      Hub -->|entMcp static target| GSvc
+      GSvc -->|HBONE/mTLS| Spoke
+      Spoke -->|entMcp static target| MCP
+
+  infra: eks-multi-cluster
+  category: multi-cluster
+
+  requires:
+    applications:
+      - name: mcp-server-everything
+        namespace: mcp-backend
+        clusters:
+          - name: west
+
+  features:
+    # ── WEST (spoke) ──────────────────────────────────────────────────────────
+
+    # EnterpriseAgentgatewayBackend: spoke → mcp-server-everything pods
+    - name: agentgateway-backend
+      description: Spoke EnterpriseAgentgatewayBackend targeting mcp-server-everything
+      config:
+        backendName: mcp-server-everything-backend
+        namespace: agentgateway-proxy
+        enterprise: true
+        mcp:
+          targets:
+            - name: mcp-server-everything
+              static:
+                host: mcp-server-everything.mcp-backend.svc.cluster.local
+                port: 3001
+                protocol: StreamableHTTP
+          sessionRouting: Stateless
+      clusters:
+        - name: west
+
+    # HTTPRoute: spoke gateway → mcp-server-everything-backend
+    - name: ingress-httproute
+      description: Spoke gateway routes MCP traffic to mcp-server-everything-backend
+      config:
+        routeName: mcp-spoke-route
+        gatewayName: spoke-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        namespace: agentgateway-proxy
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: mcp-server-everything-backend
+                backendKind: AgentgatewayBackend
+      clusters:
+        - name: west
+
+    # ── EAST (hub) ────────────────────────────────────────────────────────────
+
+    # EnterpriseAgentgatewayBackend: hub → spoke gateway via global service
+    - name: agentgateway-backend
+      description: Hub EnterpriseAgentgatewayBackend targeting spoke gateway global service
+      config:
+        backendName: spoke-mcp-backend
+        namespace: agentgateway-proxy
+        enterprise: true
+        mcp:
+          targets:
+            - name: spoke-mcp
+              static:
+                host: spoke-agentgateway-proxy.agentgateway-proxy.mesh.internal
+                port: 80
+                protocol: StreamableHTTP
+          sessionRouting: Stateless
+      clusters:
+        - name: east
+
+    # HTTPRoute: hub gateway → spoke-mcp-backend
+    - name: ingress-httproute
+      description: Hub gateway routes MCP traffic to spoke via global service backend
+      config:
+        routeName: mcp-hub-route
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        namespace: agentgateway-proxy
+        hostname: '{{env.domains.app.main}}'
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: spoke-mcp-backend
+                backendKind: AgentgatewayBackend
+      clusters:
+        - name: east
+
+  tests:
+    - name: spoke-gateway-global-service-visible-on-hub
+      description: Confirms the ambient mesh has auto-discovered the spoke gateway as a global service on the hub cluster, proving cross-cluster service discovery works before any MCP traffic is sent
+      clusters:
+        - name: east
+      steps:
+        - action: exec
+          command: kubectl get serviceentry -n istio-system -o jsonpath='{.items[*].spec.hosts[*]}'
+          timeout: 30s
+          retries: 5
+          retryDelay: 6000
+        - action: verify
+          expect:
+            contains:
+              - spoke-agentgateway-proxy.agentgateway-proxy.mesh.internal
+
+    - name: mcp-initialize-via-hub
+      description: Sends a real MCP initialize handshake through the hub gateway and confirms it succeeds end-to-end across the spoke chain, proving the cross-cluster data path actually works and not just the control-plane wiring
+      clusters:
+        - name: east
+      steps:
+        - action: send-request
+          hostname: '{{env.domains.app.main}}'
+          autoDetectGwAddress: true
+          path: /mcp
+          method: POST
+          headers:
+            Content-Type: application/json
+            Accept: application/json, text/event-stream
+          body: '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agentic-demo","version":"1.0"}}}'
+          timeout: 30s
+          retries: 5
+          retryDelay: 6000
+        - action: verify
+          expect:
+            statusCode: 200
+
+    - name: mcp-tools-list-via-hub
+      description: Lists the MCP tools exposed by the backend through the full hub-to-spoke chain, confirming the gateway correctly proxies the MCP protocol itself and not just a bare TCP/HTTP connection
+      clusters:
+        - name: east
+      steps:
+        - action: exec
+          command: >-
+            kubectl run mcp-client --image=curlimages/curl:latest --restart=Never --rm -i --
+            curl -s -X POST http://{{env.domains.app.main}}/mcp
+            -H 'Content-Type: application/json'
+            -H 'Accept: application/json, text/event-stream'
+            --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+          timeout: 60s
+          retries: 3
+          retryDelay: 10000
+        - action: verify
+          expect:
+            contains:
+              - '"tools"'

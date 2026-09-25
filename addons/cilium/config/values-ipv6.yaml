@@ -1,0 +1,5 @@
+# Cilium IPv6 overlay for EKS IPv6 clusters
+
+ipv6:
+  enabled: true
+enableIPv6Masquerade: false

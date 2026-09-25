@@ -1,0 +1,126 @@
+apiVersion: agentic.demo/v1
+kind: Environment
+metadata:
+  name: aws-dev
+  description: AWS environment
+
+spec:
+  # AWS configuration
+  aws:
+    region: ap-southeast-1
+
+  acme:
+    email: kasun.talwatta@solo.io
+
+  # DNS configuration for Route53
+  dns:
+    provider: route53
+    parentZone:
+      domain: kasunt.apac.fe.solo.io
+      hostedZoneId: Z08818701HDZ6PBD6LPXU
+    childZone: mesh-demo
+    txtOwnerId: agentic-demo
+
+  tls:
+    issuer: letsencrypt-dns
+
+  # Okta tenant
+  okta:
+    domain: integrator-1335842.okta.com
+
+  # CIDR allowlist applied to public-facing NLBs (aws-load-balancer-source-ranges).
+  # Checkpoint Harmony SASE documented egress range.
+  security:
+    vpnSourceRanges:
+      - 165.99.148.61/32
+      - 64.226.138.86/32
+
+  keycloak:
+    scheme: https
+    loginTheme: keycloak-soloio-login-theme
+    image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.3
+
+  agentregistry:
+    scheme: https
+    version: 2026.8.0
+
+  agentgateway:
+    scheme: https
+    version: v2026.8.2
+
+  kagent:
+    scheme: https
+    version: 0.5.6
+
+  soloUi:
+    version: 0.5.6
+
+  entra:
+    # sre-incident-response-system usecase
+    sreIRS:
+      tenantId: 61d878b3-d211-4da5-99ca-8108d01b2156
+      chatAppClientId: 3b575c62-07da-4487-86a3-6408015d2520
+      agentGatewayClientId: 6e7ec90c-4b1a-40d6-b096-c0e43641c11a
+      repoMcpClientId: e32b61f8-6801-4d3d-993e-882252ca06cd
+
+  images:
+    finflow:
+      marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.0
+      newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.0
+    retailReturns:
+      supportTriage: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-support-triage:v0.1.0
+      orderLookup: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-order-lookup:v0.1.0
+      fraudCheck: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-fraud-check:v0.1.0
+      refundApproval: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-refund-approval:v0.1.0
+      orderDb: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-order-db:v0.1.0
+      payment: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-payment:v0.1.0
+      shipping: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-shipping:v0.1.0
+      inventory: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-inventory:v0.1.0
+      fraudScoring: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-fraud-scoring:v0.1.0
+      carrier: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-carrier:v0.1.0
+      loyaltyRewards: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-loyalty-rewards:v0.1.0
+      ui: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-ui:v0.1.0
+      piiGuardrail: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-pii-guardrail:v0.1.0
+      stagePolicyController: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-stage-policy-controller:v0.1.0
+      returnsEligibility: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-returns-eligibility:v0.1.0
+      accessPolicyTestHarness: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-access-policy-test-harness:v0.1.0
+    sreIRS:
+      agent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-agent:v0.1.0
+      incidentMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-incident-mcp:v0.1.0
+      runbookMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-runbook-mcp:v0.1.0
+      repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
+      chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
+
+  # Internal cluster/mesh FQDNs (not publicly routable)
+  internal:
+    gateway:
+      internalHost: http://hub-agentgateway-proxy.agentgateway-proxy.svc.cluster.local
+    telemetry:
+      otelTracesCollector: opentelemetry-collector-traces.telemetry.svc.cluster.local
+      otelGatewayEndpoint: opentelemetry-collector-gateway.telemetry.mesh.internal
+      lokiPushUrl: http://loki.telemetry.mesh.internal:3100/loki/api/v1/push
+    agentregistry:
+      telemetryEndpoint: http://agentregistry-enterprise-telemetry-collector.agentregistry-system.svc.cluster.local:4318
+    kagent:
+      controllerUrl: http://kagent-controller.kagent-system.svc.cluster.local:8083
+    soloUi:
+      tunnelFqdn: solo-enterprise-ui.solo-enterprise.mesh.internal
+      telemetryFqdn: solo-enterprise-telemetry-gateway.solo-enterprise.mesh.internal
+
+  # Domain mappings - auto-generated pattern: <service>.<childZone>.<parentDomain>
+  # core: shared platform/product hostnames, used across every usecase.
+  # app: per-usecase dedicated hostnames (own Gateway), one entry per usecase that has one.
+  domains:
+    core:
+      keycloak: keycloak.mesh-demo.kasunt.apac.fe.solo.io
+      grafana: grafana.mesh-demo.kasunt.apac.fe.solo.io
+      agentregistryUi: agentregistry-ui.mesh-demo.kasunt.apac.fe.solo.io
+      agentregistryTelemetry: agentregistry-telemetry.mesh-demo.kasunt.apac.fe.solo.io
+      soloUi: solo-ui.mesh-demo.kasunt.apac.fe.solo.io
+      kagentUi: kagent-ui.mesh-demo.kasunt.apac.fe.solo.io
+      agentgatewayUi: agw-ui.mesh-demo.kasunt.apac.fe.solo.io
+      meshUi: mesh-ui.mesh-demo.kasunt.apac.fe.solo.io
+    app:
+      main: app.mesh-demo.kasunt.apac.fe.solo.io
+      retailReturns: retail-returns.mesh-demo.kasunt.apac.fe.solo.io
+      sreIRS: sre-irs.mesh-demo.kasunt.apac.fe.solo.io

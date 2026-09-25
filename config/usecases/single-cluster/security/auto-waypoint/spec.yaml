@@ -1,0 +1,78 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: auto-waypoint
+  description: '[Enterprise] Automatic waypoint deployment via istio.io/use-waypoint=auto label. Istiod auto-creates waypoint proxies for labeled namespaces.'
+spec:
+  category: security
+  requires:
+    applications:
+      - name: bookinfo
+        namespace: bookinfo
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+
+  features:
+    - name: gateway
+      description: Create ingress gateway for Bookinfo
+      config:
+        gatewayName: bookinfo
+        namespace: bookinfo
+        gateway:
+          listeners:
+            - name: http
+              hostname: bookinfo.example.com
+              port: 80
+              protocol: HTTP
+              allowedRoutes:
+                namespaces:
+                  from: Same
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: request-routing
+      description: Route traffic to productpage
+      config:
+        routeName: bookinfo
+        namespace: bookinfo
+        gatewayName: bookinfo
+        gatewayNamespace: bookinfo
+        hostname: bookinfo.example.com
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: productpage
+                port: 9080
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: waypoint
+      description: Label namespace with auto waypoint (istiod creates waypoint automatically)
+      config:
+        waypointName: auto
+        namespace: bookinfo
+        labels:
+          target: namespace
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: waypoint-auto-created
+      description: Verify auto-waypoint gateway was created by istiod
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: exec
+          command: kubectl get gateway -n bookinfo -l istio.io/waypoint-for=namespace -o name
+          timeout: 60s
+        - action: verify
+          expect:
+            contains: 'gateway.gateway.networking.k8s.io/'

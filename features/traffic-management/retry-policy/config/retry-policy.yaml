@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: retry-policy
+  namespace: default
+spec:
+  hosts:
+    - httpbin
+  http:
+    - retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: 5xx,reset,connect-failure
+      route:
+        - destination:
+            host: httpbin

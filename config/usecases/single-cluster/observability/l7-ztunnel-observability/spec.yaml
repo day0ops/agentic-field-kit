@@ -1,0 +1,91 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: l7-ztunnel-observability
+  description: '[Enterprise] L7 HTTP metrics, traces, and access logs from ztunnel without deploying waypoints. Shows istio_requests_total with response_code, method, path labels.'
+spec:
+  category: observability
+  requires:
+    applications:
+      - name: bookinfo
+        namespace: bookinfo
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+
+  features:
+    - name: gateway
+      description: Create ingress gateway for Bookinfo
+      config:
+        gatewayName: bookinfo
+        namespace: bookinfo
+        gateway:
+          listeners:
+            - name: http
+              hostname: bookinfo.example.com
+              port: 80
+              protocol: HTTP
+              allowedRoutes:
+                namespaces:
+                  from: Same
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: request-routing
+      description: Route traffic to productpage
+      config:
+        routeName: bookinfo
+        namespace: bookinfo
+        gatewayName: bookinfo
+        gatewayNamespace: bookinfo
+        hostname: bookinfo.example.com
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: productpage
+                port: 9080
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: ztunnel-metrics
+      description: Scrape L7 HTTP metrics from ztunnel (Enterprise feature)
+      config:
+        namespace: istio-system
+        metricsPort: 15020
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: bookinfo-accessible
+      description: Verify bookinfo is accessible for L7 ztunnel metric collection
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: send-request
+          hostname: bookinfo.example.com
+          autoDetectGwAddress: true
+          path: /productpage
+          timeout: 30s
+        - action: verify
+          expect:
+            statusCode: 200
+
+    - name: ztunnel-l7-metrics
+      description: Verify ztunnel pods are running for L7 metric collection
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: exec
+          command: kubectl get pods -n istio-system -l app=ztunnel -o jsonpath='{.items[0].status.phase}'
+          timeout: 15s
+        - action: verify
+          expect:
+            contains: Running

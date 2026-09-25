@@ -1,0 +1,377 @@
+---
+# SRE Incident Response System - validates cross-domain MCP gateway identity
+# federation (Keycloak-federated-with-Entra vs. Entra-native trust domains)
+# using real Enterprise Agentgateway. Source: github.com/day0ops/sre-incident-response-system
+#
+# incident-mcp/runbook-mcp/repo-mcp perform NO JWT verification of their own -
+# Enterprise Agentgateway is the enforcement point (JWT auth, Keycloak token
+# exchange, Entra On-Behalf-Of + elicitation), matching this repo's sibling
+# retail-returns-agent-system's real MCP servers.
+#
+# Image tags come from config/environments/<env>.yaml's images.sreIRS.*
+# via {{env.images.sreIRS.*}} tokens below - bump the version there, not here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sre-incident-response
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    app.kubernetes.io/part-of: sre-incident-response
+---
+# ────────────────────────────────────────────────────────────────────────────
+# incident-mcp - Hub-owned, Keycloak-trusting, tool: get_unhealthy_pods
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-mcp
+  namespace: sre-incident-response
+  labels:
+    app: incident-mcp
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-mcp
+  template:
+    metadata:
+      labels:
+        app: incident-mcp
+    spec:
+      containers:
+        - name: server
+          image: '{{env.images.sreIRS.incidentMcp}}'
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9101
+          resources:
+            requests: { memory: '64Mi', cpu: '50m' }
+            limits: { memory: '128Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 9101 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 9101 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-mcp
+  namespace: sre-incident-response
+  labels:
+    app: incident-mcp
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  selector:
+    app: incident-mcp
+  ports:
+    - name: http
+      port: 9101
+      targetPort: 9101
+      appProtocol: http
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# runbook-mcp - second Hub/Keycloak server, different audience, tool:
+# get_deployment_history. Proves audience isolation: a token exchanged for
+# incident-mcp must be rejected here.
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runbook-mcp
+  namespace: sre-incident-response
+  labels:
+    app: runbook-mcp
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: runbook-mcp
+  template:
+    metadata:
+      labels:
+        app: runbook-mcp
+    spec:
+      containers:
+        - name: server
+          image: '{{env.images.sreIRS.runbookMcp}}'
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9102
+          resources:
+            requests: { memory: '64Mi', cpu: '50m' }
+            limits: { memory: '128Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 9102 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 9102 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runbook-mcp
+  namespace: sre-incident-response
+  labels:
+    app: runbook-mcp
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  selector:
+    app: runbook-mcp
+  ports:
+    - name: http
+      port: 9102
+      targetPort: 9102
+      appProtocol: http
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# repo-mcp - Spoke-owned, Entra-trusting only, tool: rollback_deployment.
+# Never talks to Keycloak. Reached via Entra On-Behalf-Of + elicitation, not
+# token exchange.
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: repo-mcp
+  namespace: sre-incident-response
+  labels:
+    app: repo-mcp
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: repo-mcp
+  template:
+    metadata:
+      labels:
+        app: repo-mcp
+    spec:
+      containers:
+        - name: server
+          image: '{{env.images.sreIRS.repoMcp}}'
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9103
+          resources:
+            requests: { memory: '64Mi', cpu: '50m' }
+            limits: { memory: '128Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 9103 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 9103 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: repo-mcp
+  namespace: sre-incident-response
+  labels:
+    app: repo-mcp
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  selector:
+    app: repo-mcp
+  ports:
+    - name: http
+      port: 9103
+      targetPort: 9103
+      appProtocol: http
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# agent - real MCP client (modelcontextprotocol/go-sdk). Self-validates its
+# own Entra token, drives get_unhealthy_pods -> get_deployment_history ->
+# rollback_deployment through the gateway, handles the /elicitations lifecycle
+# for the rollback consent flow. Never reached directly by anything except
+# chat-app (ClusterIP only, no public route).
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-irs-agent
+  namespace: sre-incident-response
+  labels:
+    app: sre-irs-agent
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sre-irs-agent
+  template:
+    metadata:
+      labels:
+        app: sre-irs-agent
+    spec:
+      containers:
+        - name: agent
+          image: '{{env.images.sreIRS.agent}}'
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9200
+          env:
+            - name: ENTRA_ISSUER
+              value: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/v2.0'
+            - name: ENTRA_JWKS_URL
+              value: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/discovery/v2.0/keys'
+            - name: ENTRA_AUDIENCE
+              value: '{{env.entra.sreIRS.agentGatewayClientId}}'
+            # Agent's own LLM call, routed to agentgateway's OpenAI-compatible provider
+            # route (this usecase's `providers` feature registers /sre-irs/llm on
+            # hub-agentgateway-proxy) via the shared internal Service DNS -- same
+            # convention retail-returns' agents use for their own internal gateway
+            # calls (env.internal.gateway.internalHost), not the public hostname, since
+            # this traffic never leaves the cluster. LLM_URL/LLM_MODEL default to a
+            # bogus localhost:9100 fallback in agent/main.go if unset -- confirmed live
+            # ("connection refused") this was simply missing here.
+            - name: LLM_URL
+              value: '{{env.internal.gateway.internalHost}}/sre-irs/llm/v1'
+            - name: LLM_MODEL
+              value: gpt-4o
+            # Routed through the hub agentgateway (shared env.domains.app.main,
+            # same convention as retail-returns' /retail-returns/order-db), not
+            # the Services directly - this is the whole point: agentgateway
+            # validates the Entra JWT and performs the Keycloak exchange or
+            # Entra OBO before the request ever reaches
+            # incident-mcp/runbook-mcp/repo-mcp.
+            - name: INCIDENT_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/sre-irs/incident-mcp'
+            - name: RUNBOOK_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/sre-irs/runbook-mcp'
+            - name: REPO_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/sre-irs/repo-mcp'
+            # Enterprise agentgateway controller's own token-exchange/elicitation
+            # STS, reached directly (in-cluster Service DNS) for its own
+            # /elicitations management API - same pattern retail-returns-ui uses
+            # for ELICITATION_STS_URL.
+            - name: STS_URL
+              value: 'http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777'
+          resources:
+            requests: { memory: '64Mi', cpu: '50m' }
+            limits: { memory: '128Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 9200 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 9200 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-irs-agent
+  namespace: sre-incident-response
+  labels:
+    app: sre-irs-agent
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  selector:
+    app: sre-irs-agent
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+      appProtocol: http
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# chat-app - Entra login + task input. The only publicly-exposed component
+# (see the sre-irs-chat-app-https Gateway/HTTPRoute in the usecase spec);
+# handles its own OIDC Authorization Code flow directly (not gated by
+# agentgateway ExtAuth, unlike retail-returns-ui's oidc-gateway) since Entra
+# login IS the point being validated.
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-irs-chat-app
+  namespace: sre-incident-response
+  labels:
+    app: sre-irs-chat-app
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sre-irs-chat-app
+  template:
+    metadata:
+      labels:
+        app: sre-irs-chat-app
+    spec:
+      containers:
+        - name: chat-app
+          image: '{{env.images.sreIRS.chatApp}}'
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5174
+          env:
+            - name: PORT
+              value: '5174'
+            - name: ENTRA_AUTHORIZE_URL
+              value: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/oauth2/v2.0/authorize'
+            - name: ENTRA_TOKEN_URL
+              value: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/oauth2/v2.0/token'
+            - name: ENTRA_CHAT_CLIENT_ID
+              value: '{{env.entra.sreIRS.chatAppClientId}}'
+            - name: ENTRA_CHAT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: sre-irs-entra-secrets
+                  key: chat-app-client-secret
+            - name: ENTRA_CHAT_REDIRECT_URI
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.sreIRS}}/callback'
+            # Must match agent-gateway's actual Application ID URI (see
+            # docs/entra-tenant-setup.md 4b) or the authorize request fails
+            # with an invalid-scope error - this tenant only allows the
+            # default api://<client-id> form, hence the templated GUID here.
+            - name: ENTRA_CHAT_SCOPE
+              value: 'openid profile api://{{env.entra.sreIRS.agentGatewayClientId}}/access_as_user'
+            - name: AGENT_URL
+              value: 'http://sre-irs-agent.sre-incident-response.svc.cluster.local:9200'
+          resources:
+            requests: { memory: '96Mi', cpu: '50m' }
+            limits: { memory: '256Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 5174 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 5174 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-irs-chat-app
+  namespace: sre-incident-response
+  labels:
+    app: sre-irs-chat-app
+    app.kubernetes.io/part-of: sre-incident-response
+spec:
+  selector:
+    app: sre-irs-chat-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5174
+      appProtocol: http
+  type: ClusterIP

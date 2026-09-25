@@ -1,0 +1,252 @@
+# OTel Collector — Metrics (east/full mode)
+# Scrapes Istio Ambient mesh components + agentgateway control planes locally.
+# Remote-writes to local Prometheus.
+
+clusterRole:
+  create: true
+  rules:
+    - apiGroups:
+        - ''
+      resources:
+        - pods
+        - nodes
+        - nodes/proxy
+        - nodes/metrics
+      verbs:
+        - get
+        - list
+        - watch
+
+config:
+  receivers:
+    prometheus/istiod:
+      config:
+        scrape_configs:
+          - job_name: istiod
+            scrape_interval: 30s
+            honor_labels: true
+            kubernetes_sd_configs:
+              - role: pod
+            relabel_configs:
+              - action: keep
+                regex: istiod
+                source_labels:
+                  - __meta_kubernetes_pod_label_app
+              - action: replace
+                regex: (.+)
+                replacement: $1:15014
+                source_labels:
+                  - __meta_kubernetes_pod_ip
+                target_label: __address__
+              - action: labelmap
+                regex: __meta_kubernetes_pod_label_(.+)
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_namespace
+                target_label: namespace
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_pod_name
+                target_label: pod
+              - action: drop
+                regex: Pending|Succeeded|Failed|Completed
+                source_labels:
+                  - __meta_kubernetes_pod_phase
+
+    prometheus/ztunnel:
+      config:
+        scrape_configs:
+          - job_name: ztunnel
+            scrape_interval: 30s
+            honor_labels: true
+            kubernetes_sd_configs:
+              - role: pod
+            relabel_configs:
+              - action: keep
+                regex: ztunnel
+                source_labels:
+                  - __meta_kubernetes_pod_label_app
+              - action: keep
+                regex: 'true'
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_scrape
+              - action: replace
+                regex: (https?)
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_scheme
+                target_label: __scheme__
+              - action: replace
+                regex: (.+)
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_path
+                target_label: __metrics_path__
+              - action: replace
+                regex: (\d+);((([0-9]+?)(\.|$)){4})
+                replacement: $2:$1
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_port
+                  - __meta_kubernetes_pod_ip
+                target_label: __address__
+              - action: labelmap
+                regex: __meta_kubernetes_pod_label_(.+)
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_namespace
+                target_label: namespace
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_pod_name
+                target_label: pod
+              - action: drop
+                regex: Pending|Succeeded|Failed|Completed
+                source_labels:
+                  - __meta_kubernetes_pod_phase
+
+    prometheus/gateway:
+      config:
+        scrape_configs:
+          - job_name: gateway
+            scrape_interval: 30s
+            honor_labels: true
+            kubernetes_sd_configs:
+              - role: pod
+            relabel_configs:
+              - action: keep
+                regex: .+
+                source_labels:
+                  - __meta_kubernetes_pod_label_gateway_networking_k8s_io_gateway_name
+              - action: keep
+                regex: 'true'
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_scrape
+              - action: replace
+                regex: (https?)
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_scheme
+                target_label: __scheme__
+              - action: replace
+                regex: (.+)
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_path
+                target_label: __metrics_path__
+              - action: replace
+                regex: (\d+);((([0-9]+?)(\.|$)){4})
+                replacement: $2:$1
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_port
+                  - __meta_kubernetes_pod_ip
+                target_label: __address__
+              - action: labelmap
+                regex: __meta_kubernetes_pod_label_(.+)
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_namespace
+                target_label: namespace
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_pod_name
+                target_label: pod
+              - action: drop
+                regex: Pending|Succeeded|Failed|Completed
+                source_labels:
+                  - __meta_kubernetes_pod_phase
+
+    prometheus/agentgateway-controlplane:
+      config:
+        scrape_configs:
+          - job_name: agentgateway-controlplane
+            scrape_interval: 30s
+            honor_labels: true
+            kubernetes_sd_configs:
+              - role: pod
+            relabel_configs:
+              - action: keep
+                regex: agentgateway
+                source_labels:
+                  - __meta_kubernetes_pod_label_agentgateway
+              - action: keep
+                regex: 'true'
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_scrape
+              - action: replace
+                regex: (.+)
+                source_labels:
+                  - __meta_kubernetes_pod_annotation_prometheus_io_path
+                target_label: __metrics_path__
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_pod_ip
+                  - __meta_kubernetes_pod_annotation_prometheus_io_port
+                separator: ':'
+                target_label: __address__
+              - action: labelmap
+                regex: __meta_kubernetes_pod_label_(.+)
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_namespace
+                target_label: kube_namespace
+              - action: replace
+                source_labels:
+                  - __meta_kubernetes_pod_name
+                target_label: pod
+
+    prometheus/cadvisor:
+      config:
+        scrape_configs:
+          - job_name: kubernetes-cadvisor
+            scrape_interval: 30s
+            honor_labels: true
+            kubernetes_sd_configs:
+              - role: node
+            scheme: https
+            tls_config:
+              ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              insecure_skip_verify: true
+            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+            relabel_configs:
+              - action: labelmap
+                regex: __meta_kubernetes_node_label_(.+)
+              - target_label: __address__
+                replacement: kubernetes.default.svc:443
+              - source_labels: [__meta_kubernetes_node_name]
+                regex: (.+)
+                target_label: __metrics_path__
+                replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+            metric_relabel_configs:
+              - source_labels: [__name__]
+                regex: >-
+                  container_(memory_working_set_bytes|memory_rss|cpu_usage_seconds_total|
+                  cpu_cfs_throttled_seconds_total|cpu_cfs_periods_total|cpu_cfs_throttled_periods_total|
+                  network_receive_bytes_total|network_transmit_bytes_total|fs_usage_bytes|fs_limit_bytes)
+                action: keep
+
+  processors:
+    resource/cluster_context:
+      attributes:
+        - key: cluster
+          action: insert
+          value: '{{CLUSTER_NAME}}'
+
+  exporters:
+    prometheusremotewrite/local:
+      endpoint: 'http://kube-prometheus-stack-prometheus.{{TELEMETRY_NAMESPACE}}.svc.cluster.local:9090/api/v1/write'
+      add_metric_suffixes: false
+      resource_to_telemetry_conversion:
+        enabled: true
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      metrics:
+        receivers:
+          - prometheus/istiod
+          - prometheus/ztunnel
+          - prometheus/gateway
+          - prometheus/agentgateway-controlplane
+          - prometheus/cadvisor
+        processors:
+          - resource/cluster_context
+          - batch
+        exporters:
+          - prometheusremotewrite/local

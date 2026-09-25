@@ -1,0 +1,1099 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: retail-returns-registration
+  description: |
+    Demonstration of Retail Returns Agent System.
+    - Uses kagent as the runtime, registered on agentregistry. Requests such as a2a are routed via agentgateway.
+    - Dedicated Virtual Runtime (retail-returns-mcp-gateway) wired to hub agentgateway
+    - 4 agents registered against dedicated per-cluster kagent Runtimes
+      (retail-returns-kagent-east, retail-returns-kagent-west).
+    - Guided tour: all 10 stages implemented, from identity & token exchange through multicluster.
+
+spec:
+  infra: eks-multi-cluster
+  category: multi-cluster
+
+  requires:
+    applications:
+      - name: retail-returns-agent-system
+        namespace: retail-returns
+        clusters:
+          - name: east
+      # Phase 10 (multicluster): loyalty-rewards-mcp runs entirely on west,
+      # cataloged into east's AgentRegistry (doesnt support yet) via a cross-cluster mesh.internal
+      # URL (see the agentregistry-catalog step below) -- proves an agent can
+      # call a tool that lives on a completely different physical cluster.
+      - name: retail-returns-loyalty
+        namespace: retail-returns
+        clusters:
+          - name: west
+
+  features:
+    # East has no application in requires.applications targeting the retail-returns
+    # namespace anymore (west's namespace is created as a side effect of the
+    # retail-returns-loyalty application above), so it needs its own explicit step.
+    - name: namespace
+      description: 'Ensure the retail-returns namespace exists on east'
+      config:
+        namespace: retail-returns
+      clusters:
+        - name: east
+
+    - name: env-secret
+      description: 'Create the demo-customer-credentials Secret the UI BFF needs for ROPC login'
+      config:
+        secretName: demo-customer-credentials
+        namespace: retail-returns
+        key: password
+        envVar: RETAIL_RETURNS_CUSTOMER_PASSWORD
+      clusters:
+        - name: east
+
+    # ── Step 0: Register OpenAI LLM backend on hub agentgateway ───────────────
+    # Registered fresh each deploy, independent of finflow's own setup.
+
+    - name: providers
+      description: 'AgentGateway: register OpenAI LLM backend at /openai (path rewrite to /)'
+      config:
+        enterprise: true
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        providers:
+          - name: openai
+            pathPrefix: /openai
+            pathRewrite: /
+            # Standard (non-reasoning) model -- reasoning models need extra
+            # config elsewhere in the agents, so keep this one non-reasoning.
+            model: gpt-4o
+      clusters:
+        - name: east
+
+    # ── Step 1: Wire agentregistry into hub gateway + create Virtual Runtime ──
+
+    - name: agentregistry-route
+      description: 'AgentRegistry: create retail-returns-mcp-gateway Virtual Runtime on hub agentgateway'
+      config:
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        agentregistryNamespace: agentregistry-system
+        runtimeName: retail-returns-mcp-gateway
+        routeName: retail-returns-agentregistry-delegate
+        pathPrefix: /retail-returns
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 1b (RFC 8693 delegation): a second, independent Virtual Runtime +
+    # delegate route on the SAME Gateway, carrying order-db/shipping/fraud-scoring
+    # a second time (Step 3 below) for order-lookup/fraud-check's own outbound MCP
+    # calls only. token-exchange-policy's JWT policy targets HTTPRoutes by name and
+    # never wildcards -- this route's
+    # name is deliberately never added there, so it stays genuinely unauthenticated,
+    # letting the kagent SDK's own STS-exchanged (agentgateway-self-issued) delegation
+    # token reach these MCP servers intact instead of being rejected by the shared
+    # route's Keycloak-only Strict JWT gate or stripped of its `act` claim by the
+    # shared route's subject-only re-exchange.
+    - name: agentregistry-route
+      description: 'AgentRegistry: create retail-returns-mcp-gateway-delegated Virtual Runtime on hub agentgateway (no JWT policy)'
+      config:
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        agentregistryNamespace: agentregistry-system
+        runtimeName: retail-returns-mcp-gateway-delegated
+        routeName: retail-returns-agentregistry-delegate-delegated
+        pathPrefix: /retail-returns-delegated
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 2: Register kagent as a compute provider ─────────────────────────
+    # Own Runtime names (not just "retail-returns-kagent") so this demo stays
+    # independent from finflow's, and east/west are distinguishable at a glance.
+
+    - name: agentregistry-provider
+      description: 'AgentRegistry: register east kagent as a provider for agent discovery'
+      config:
+        type: kagent
+        providerName: retail-returns-kagent-east
+        kagentControllerUrl: '{{env.internal.kagent.controllerUrl}}'
+        kagentNamespace: kagent-system
+        telemetryEndpoint: '{{env.internal.agentregistry.telemetryEndpoint}}'
+        # Required by AgentRegistry for every kagent Runtime; reuses the same
+        # Keycloak client already set up for this.
+        outboundAuth:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientId: agentregistry
+          clientSecret: agentregistry-secret
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 2b (Phase 11, multicluster) ── Register west kagent as a second,
+    # independent compute provider. Reaches west's kagent-controller directly via
+    # the ambient mesh's cross-cluster mesh.internal resolution (agentregistry-system
+    # on east and kagent on west are both ambient-enabled and kagent-controller is
+    # marked solo.io/service-scope=global specifically for this -- see the
+    # agentregistry/kagent addon configs). Reuses the same outboundAuth/arctl
+    # identity as east since both clusters' kagent controllers trust the same
+    # shared Keycloak realm.
+    - name: agentregistry-provider
+      description: 'AgentRegistry: register west kagent as a provider for agent discovery'
+      config:
+        type: kagent
+        providerName: retail-returns-kagent-west
+        kagentControllerUrl: 'http://kagent-controller.kagent-system.mesh.internal:8083'
+        kagentNamespace: kagent-system
+        outboundAuth:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientId: agentregistry
+          clientSecret: agentregistry-secret
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 2c: Deploy the 6 MCP servers via AgentRegistry, provisioned on the
+    # east kagent Runtime (agentregistry-mcp-server) instead of as plain
+    # Kubernetes Deployments. Distinct serverName per server (suffixed
+    # -workload) from the gateway-routing catalog entries below --
+    # AgentRegistry keys MCPServer/Deployment identity on serverName in a flat,
+    # non-namespaced catalog, so the pod-provisioning entry and the
+    # gateway-routing entry (Step 3, same physical server) can't share one
+    # name. Resulting Service lands at
+    # <serverName>.kagent-system.svc.cluster.local:<port> (confirmed live) --
+    # Step 3's serviceName/serviceNamespace below point there.
+    - name: agentregistry-mcp-server
+      description: 'AgentRegistry: deploy order-db-mcp on the east kagent runtime'
+      config:
+        serverName: order-db-workload
+        title: 'Order Database (kagent workload)'
+        description: 'kagent provisioned workload backing the "Order Database" MCP route -- not for direct discovery'
+        image: '{{env.images.retailReturns.orderDb}}'
+        port: 8080
+        path: /mcp
+        runtimeName: retail-returns-kagent-east
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-mcp-server
+      description: 'AgentRegistry: deploy payment-mcp on the east kagent runtime'
+      config:
+        serverName: payment-workload
+        title: 'Payment Service (kagent workload)'
+        description: 'kagent provisioned workload backing the "Payment Service" MCP route -- not for direct discovery'
+        image: '{{env.images.retailReturns.payment}}'
+        port: 8080
+        path: /mcp
+        runtimeName: retail-returns-kagent-east
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-mcp-server
+      description: 'AgentRegistry: deploy shipping-mcp on the east kagent runtime'
+      config:
+        serverName: shipping-workload
+        title: 'Shipping Service (kagent workload)'
+        description: 'kagent provisioned workload backing the "Shipping Service" MCP route -- not for direct discovery'
+        image: '{{env.images.retailReturns.shipping}}'
+        port: 8080
+        path: /mcp
+        runtimeName: retail-returns-kagent-east
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-mcp-server
+      description: 'AgentRegistry: deploy inventory-mcp on the east kagent runtime'
+      config:
+        serverName: inventory-workload
+        title: 'Inventory Service (kagent workload)'
+        description: 'kagent provisioned workload backing the "Inventory Service" MCP route -- not for direct discovery'
+        image: '{{env.images.retailReturns.inventory}}'
+        port: 8080
+        path: /mcp
+        runtimeName: retail-returns-kagent-east
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-mcp-server
+      description: 'AgentRegistry: deploy fraud-scoring-mcp on the east kagent runtime'
+      config:
+        serverName: fraud-scoring-workload
+        title: 'Fraud Scoring Service (kagent workload)'
+        description: 'kagent provisioned workload backing the "Fraud Scoring Service" MCP route -- not for direct discovery'
+        image: '{{env.images.retailReturns.fraudScoring}}'
+        port: 8080
+        path: /mcp
+        runtimeName: retail-returns-kagent-east
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-mcp-server
+      description: 'AgentRegistry: deploy carrier-mcp on the east kagent runtime'
+      config:
+        serverName: carrier-workload
+        title: 'Carrier Service (kagent workload)'
+        description: 'kagent provisioned workload backing the "Carrier Service" MCP route -- not for direct discovery'
+        image: '{{env.images.retailReturns.carrier}}'
+        port: 8080
+        path: /mcp
+        runtimeName: retail-returns-kagent-east
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 3: Catalog the 5 MCP servers ──────────────────────────────────────
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog order-db-mcp (list_orders, get_order)'
+      config:
+        serverName: order-db
+        title: 'Order Database (gateway route)'
+        description: 'Order lookup — list_orders, get_order'
+        serviceName: order-db-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /order-db
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog payment-mcp (get_payment_method, refund_payment)'
+      config:
+        serverName: payment
+        title: 'Payment Service (gateway route)'
+        description: 'Payment method lookup and refund processing'
+        serviceName: payment-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /payment
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog shipping-mcp (get_shipment_status)'
+      config:
+        serverName: shipping
+        title: 'Shipping Service (gateway route)'
+        description: 'Shipment status lookup'
+        serviceName: shipping-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /shipping
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog inventory-mcp (check_stock)'
+      config:
+        serverName: inventory
+        title: 'Inventory Service (gateway route)'
+        description: 'Stock level lookup'
+        serviceName: inventory-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /inventory
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog fraud-scoring-mcp (score_transaction)'
+      config:
+        serverName: fraud-scoring
+        title: 'Fraud Scoring Service (gateway route)'
+        description: 'Transaction fraud risk scoring'
+        serviceName: fraud-scoring-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /fraud-scoring
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 3b (Phase 10, multicluster) ── WEST: mark loyalty-rewards-mcp's own
+    # Service global so its mesh.internal hostname resolves cross-cluster --
+    # required now that east references it directly instead of via
+    # spoke-agentgateway-proxy's own (already-global) Service.
+    - name: global-service
+      description: 'Ambient mesh: mark loyalty-rewards-mcp global for cross-cluster mesh.internal resolution'
+      config:
+        namespace: retail-returns
+        services:
+          - name: loyalty-rewards-mcp
+            scope: global
+      clusters:
+        - name: west
+
+    # ── Step 3c (Phase 10, multicluster) ── EAST: catalog loyalty-rewards-mcp
+    # (west) via an explicit cross-cluster config.url pointing directly at its
+    # own mesh.internal hostname -- no spoke-agentgateway-proxy hop needed.
+    # Ambient mesh's own cross-cluster peering already provides L4/L7
+    # connectivity to west; agentgateway involvement on the west side would
+    # only add a redundant local-routing hop with no additional policy
+    # enforcement of its own (token exchange already happens at the east hub,
+    # before the cross-cluster leg). No manual east-side backend/route needed
+    # either: AgentRegistry creates its own dynamic Backend+HTTPRoute from
+    # this URL, exactly as it already does for the 5 same-cluster servers
+    # above ──────────────────────────────────────────────────────────────────
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog loyalty-rewards-mcp (get_loyalty_balance, award_points) -- runs on west'
+      config:
+        serverName: loyalty-rewards
+        title: 'Loyalty Rewards (gateway route)'
+        description: 'Customer loyalty program -- get_loyalty_balance, award_points (west cluster)'
+        url: 'http://loyalty-rewards-mcp.retail-returns.mesh.internal:8080/mcp'
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /loyalty-rewards
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 3d (RFC 8693 delegation): re-catalog order-db/shipping/fraud-scoring
+    # a second time under the delegated (policy-free) route from Step 1b -- same
+    # physical Services, different serverName (AgentRegistry's MCPServer identity
+    # is keyed on serverName, not target URL, so no conflict with the Step 3
+    # entries above) and a different runtimeName. Only order-lookup and fraud-check
+    # point at this second set (see their ORDER_DB_URL/SHIPPING_URL/FRAUD_SCORING_URL
+    # below); support-triage and everyone else keep using the original, gated entries.
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog order-db-mcp again under the delegated route (order-lookup only)'
+      config:
+        serverName: order-db-delegated
+        title: 'Order Database (delegated gateway route)'
+        description: 'Order lookup -- list_orders, get_order (RFC 8693 delegation path)'
+        serviceName: order-db-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway-delegated
+        pathSuffix: /order-db
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog shipping-mcp again under the delegated route (order-lookup only)'
+      config:
+        serverName: shipping-delegated
+        title: 'Shipping Service (delegated gateway route)'
+        description: 'Shipment status lookup (RFC 8693 delegation path)'
+        serviceName: shipping-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway-delegated
+        pathSuffix: /shipping
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog fraud-scoring-mcp again under the delegated route (fraud-check only)'
+      config:
+        serverName: fraud-scoring-delegated
+        title: 'Fraud Scoring Service (delegated gateway route)'
+        description: 'Transaction fraud risk scoring (RFC 8693 delegation path)'
+        serviceName: fraud-scoring-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway-delegated
+        pathSuffix: /fraud-scoring
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 4: Register the 4 kagent-hosted agents ────────────────────────────
+    # `region` is required by the feature (it also supports BedrockAgentCore Runtimes)
+    # but unused on this kagent path.
+
+    - name: agentregistry-agent # kagent: deploy support-triage (order lookup, first hop)
+      description: 'kagent: deploy support-triage (order lookup, first hop)'
+      config:
+        agentName: retail-returns-support-triage
+        title: 'Support Triage Agent'
+        description: "Looks up a customer's order and summarizes its status"
+        image: '{{env.images.retailReturns.supportTriage}}'
+        runtimeName: retail-returns-kagent-east
+        region: '{{env.aws.region}}'
+        env:
+          # Internal Gateway Service DNS, not the public app.mesh domain -- support-triage
+          # runs on east, so it can reach hub-agentgateway-proxy's own additionalHostnames
+          # listener directly, avoiding the hairpin-through-public-LB that
+          # {{env.agentgateway.scheme}}://{{env.domains.app.main}} takes for a same-cluster
+          # caller.
+          LLM_BASE_URL: '{{env.internal.gateway.internalHost}}/openai/v1'
+          # Required by the agent framework but never actually used -- real
+          # auth happens at agentgateway.
+          OPENAI_API_KEY: 'unused-real-auth-at-agentgateway'
+          # Same MCP tool URL the east-namespace copy of this agent uses (an
+          # agentgateway hub path, not a direct in-cluster host, so token
+          # exchange still applies). Without this the agent falls back to an
+          # unreachable localhost default and never does real work -- the
+          # original cause of kagent's tracing being empty.
+          ORDER_DB_URL: '{{env.internal.gateway.internalHost}}/retail-returns/order-db'
+          # A2A hop (Stage 3) -- must route through agentgateway, not a direct kagent
+          # Service call: agentgateway-a2a-route's Backend + token-exchange-policy's
+          # a2aAgentNames only see traffic on this path. Well-known-suffixed: a2a-go
+          # v2's agentcard.Resolver only auto-appends /.well-known/agent-card.json for
+          # a bare-root URL; a non-root path like this one is used as the literal card
+          # URL as-is.
+          ORDER_LOOKUP_AGENT_URL: '{{env.internal.gateway.internalHost}}/agents/order-lookup/.well-known/agent-card.json'
+          AGENT_CARD_URL: 'http://retail-returns-support-triage.kagent-system.svc.cluster.local:8080'
+          # kagent's TracerProvider is built with no explicit sampler, so the OTel SDK
+          # falls back to its spec-mandated default, ParentBased(AlwaysOn) -- meaning any
+          # span that inherits a *sampled=false* decision from an upstream parent context
+          # is silently dropped at creation, before export is ever attempted. Istio's
+          # ambient mesh defaults to 1% sampling, so 99% of the trace contexts it
+          # propagates into these pods carry sampled=false -- confirmed via kagent's own
+          # kagent-trace-sampling design doc, which documents this exact failure mode and
+          # recommends always_on. kagent-enterprise 0.5.5 predates the chart fix that sets
+          # this by default (upstream commit 91f2f641a, unreleased as of 0.5.5), so it's
+          # set explicitly here until a chart upgrade makes it redundant.
+          OTEL_TRACES_SAMPLER: 'always_on'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-agent # kagent: deploy order-lookup
+      description: 'kagent: deploy order-lookup (order + shipping detail)'
+      config:
+        agentName: retail-returns-order-lookup
+        title: 'Order Lookup Agent'
+        description: 'Order and shipment detail lookup'
+        image: '{{env.images.retailReturns.orderLookup}}'
+        runtimeName: retail-returns-kagent-east
+        region: '{{env.aws.region}}'
+        env:
+          # See support-triage's own LLM_BASE_URL comment above for why this is
+          # internalHost rather than the public app.mesh domain.
+          LLM_BASE_URL: '{{env.internal.gateway.internalHost}}/openai/v1'
+          OPENAI_API_KEY: 'unused-real-auth-at-agentgateway'
+          # Delegated (policy-free) route, not the shared /retail-returns one support-
+          # triage uses -- see Step 1b/3d above. Keeps this agent's own kagent-SDK-
+          # exchanged delegation token intact instead of hitting the shared route's
+          # Keycloak-only JWT gate or having its `act` claim stripped by a re-exchange.
+          ORDER_DB_URL: '{{env.internal.gateway.internalHost}}/retail-returns-delegated/order-db'
+          SHIPPING_URL: '{{env.internal.gateway.internalHost}}/retail-returns-delegated/shipping'
+          # A2A hop (Stage 3) -- routed through agentgateway so token-exchange-policy's
+          # a2aAgentNames actually covers this hop; well-known suffix required, see
+          # support-triage's ORDER_LOOKUP_AGENT_URL comment above.
+          FRAUD_CHECK_AGENT_URL: '{{env.internal.gateway.internalHost}}/agents/fraud-check/.well-known/agent-card.json'
+          AGENT_CARD_URL: 'http://retail-returns-order-lookup.kagent-system.svc.cluster.local:8080'
+          # kagent's TracerProvider is built with no explicit sampler, so the OTel SDK
+          # falls back to its spec-mandated default, ParentBased(AlwaysOn) -- meaning any
+          # span that inherits a *sampled=false* decision from an upstream parent context
+          # is silently dropped at creation, before export is ever attempted. Istio's
+          # ambient mesh defaults to 1% sampling, so 99% of the trace contexts it
+          # propagates into these pods carry sampled=false -- confirmed via kagent's own
+          # kagent-trace-sampling design doc, which documents this exact failure mode and
+          # recommends always_on. kagent-enterprise 0.5.5 predates the chart fix that sets
+          # this by default (upstream commit 91f2f641a, unreleased as of 0.5.5), so it's
+          # set explicitly here until a chart upgrade makes it redundant.
+          OTEL_TRACES_SAMPLER: 'always_on'
+          # RFC 8693 delegation (act claim): the kagent SDK's own STS plugin exchanges
+          # this pod's own ServiceAccount token + the forwarded customer JWT for a
+          # delegation token, and injects it into this agent's own outbound MCP calls
+          # (order-db, shipping, via ORDER_DB_URL/SHIPPING_URL's delegated route above).
+          STS_WELL_KNOWN_URI: 'http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/.well-known/openid-configuration'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-agent # kagent: deploy fraud-check
+      description: 'kagent: deploy fraud-check (transaction risk scoring)'
+      config:
+        agentName: retail-returns-fraud-check
+        title: 'Fraud Check Agent'
+        description: 'Transaction fraud risk scoring'
+        image: '{{env.images.retailReturns.fraudCheck}}'
+        runtimeName: retail-returns-kagent-east
+        region: '{{env.aws.region}}'
+        env:
+          # See support-triage's own LLM_BASE_URL comment above for why this is
+          # internalHost rather than the public app.mesh domain.
+          LLM_BASE_URL: '{{env.internal.gateway.internalHost}}/openai/v1'
+          OPENAI_API_KEY: 'unused-real-auth-at-agentgateway'
+          # Delegated (policy-free) route -- see order-lookup's own ORDER_DB_URL comment
+          # above.
+          FRAUD_SCORING_URL: '{{env.internal.gateway.internalHost}}/retail-returns-delegated/fraud-scoring'
+          # A2A hop (Stage 3) -- routed through agentgateway, same as the other hops;
+          # its agentgateway-a2a-route Backend resolves cross-cluster to west, so this
+          # env var itself needs no cross-cluster awareness (fraud-check itself runs on
+          # east, so internalHost -- east's own hub Gateway -- is what it should call;
+          # the Gateway resolves the west backend internally). Well-known suffix
+          # required, see support-triage's ORDER_LOOKUP_AGENT_URL comment above.
+          REFUND_APPROVAL_AGENT_URL: '{{env.internal.gateway.internalHost}}/agents/refund-approval/.well-known/agent-card.json'
+          AGENT_CARD_URL: 'http://retail-returns-fraud-check.kagent-system.svc.cluster.local:8080'
+          # kagent's TracerProvider is built with no explicit sampler, so the OTel SDK
+          # falls back to its spec-mandated default, ParentBased(AlwaysOn) -- meaning any
+          # span that inherits a *sampled=false* decision from an upstream parent context
+          # is silently dropped at creation, before export is ever attempted. Istio's
+          # ambient mesh defaults to 1% sampling, so 99% of the trace contexts it
+          # propagates into these pods carry sampled=false -- confirmed via kagent's own
+          # kagent-trace-sampling design doc, which documents this exact failure mode and
+          # recommends always_on. kagent-enterprise 0.5.5 predates the chart fix that sets
+          # this by default (upstream commit 91f2f641a, unreleased as of 0.5.5), so it's
+          # set explicitly here until a chart upgrade makes it redundant.
+          OTEL_TRACES_SAMPLER: 'always_on'
+          # RFC 8693 delegation (act claim) -- see order-lookup's own STS_WELL_KNOWN_URI
+          # comment above.
+          STS_WELL_KNOWN_URI: 'http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/.well-known/openid-configuration'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 4b (Phase 11, multicluster) ── refund-approval runs on WEST's kagent
+    # runtime (retail-returns-kagent-west), co-located with loyalty-rewards-mcp -- the
+    # only tool it calls that isn't reached via the hub agentgateway path. `clusters:
+    # east` here is where arctl/AgentRegistry itself runs, not where the agent ends up;
+    # runtimeName alone controls that (AgentRegistry's backend reaches west's
+    # kagent-controller directly over the ambient mesh -- see the agentregistry/kagent
+    # addon `ambient`/`globalServices` config).
+    - name: agentregistry-agent # kagent: deploy refund-approval (west)
+      description: 'kagent: deploy refund-approval on west (payment method + refund processing)'
+      config:
+        agentName: retail-returns-refund-approval
+        title: 'Refund Approval Agent'
+        description: 'Payment method lookup and refund processing'
+        image: '{{env.images.retailReturns.refundApproval}}'
+        runtimeName: retail-returns-kagent-west
+        region: '{{env.aws.region}}'
+        env:
+          LLM_BASE_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/openai/v1'
+          OPENAI_API_KEY: 'unused-real-auth-at-agentgateway'
+          PAYMENT_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/payment'
+          # loyalty-rewards-mcp physically runs on west too; reached the same way
+          # the real UI-facing chain reaches it, via the hub agentgateway path.
+          LOYALTY_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/loyalty-rewards'
+          # Cross-cluster identity: callers on east (fraud-check) reach this agent via
+          # ambient mesh.internal, not a same-cluster short DNS name.
+          AGENT_CARD_URL: 'http://retail-returns-refund-approval.kagent-system.mesh.internal:8080'
+          # kagent's TracerProvider is built with no explicit sampler, so the OTel SDK
+          # falls back to its spec-mandated default, ParentBased(AlwaysOn) -- meaning any
+          # span that inherits a *sampled=false* decision from an upstream parent context
+          # is silently dropped at creation, before export is ever attempted. Istio's
+          # ambient mesh defaults to 1% sampling, so 99% of the trace contexts it
+          # propagates into these pods carry sampled=false -- confirmed via kagent's own
+          # kagent-trace-sampling design doc, which documents this exact failure mode and
+          # recommends always_on. kagent-enterprise 0.5.5 predates the chart fix that sets
+          # this by default (upstream commit 91f2f641a, unreleased as of 0.5.5), so it's
+          # set explicitly here until a chart upgrade makes it redundant.
+          OTEL_TRACES_SAMPLER: 'always_on'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # kagent's controller creates this Service once the Agent CR above reconciles --
+    # mark it global so fraud-check (east) can resolve it cross-cluster.
+    - name: global-service
+      description: 'Ambient mesh: mark retail-returns-refund-approval global for cross-cluster mesh.internal resolution'
+      config:
+        namespace: kagent-system
+        services:
+          - name: retail-returns-refund-approval
+            scope: global
+      clusters:
+        - name: west
+
+    # The step above only ambient-enables the *target* side (west) -- but a
+    # *.mesh.internal name only resolves for a caller whose own pod is part of
+    # the ambient dataplane too. East's kagent-system namespace was never labeled
+    # (fraud-check is its only workload needing a cross-cluster call), so
+    # every *.mesh.internal lookup from fraud-check failed with NXDOMAIN --
+    # via ztunnel access logs showing zero outbound connection
+    # attempts from fraud-check's pod IP to refund-approval, and DNS lookups
+    # to *any* mesh.internal host (not just this one) failing identically.
+    - name: global-service
+      description: "Ambient mesh: enable east's kagent-system namespace as an ambient caller so fraud-check can resolve cross-cluster mesh.internal names"
+      config:
+        namespace: kagent-system
+        ensureAmbient: true
+      clusters:
+        - name: east
+
+    # ── Step 5 (Stage 3): Expose order-lookup/fraud-check/refund-approval for A2A ─
+    # Only the agents other agents call need a route -- support-triage is the
+    # entry point, called directly by the UI. Targets are the kagent-managed
+    # Services created by the agentregistry-agent steps above (Step 4) -- these
+    # agents have no other copy.
+    - name: agentgateway-a2a-route
+      description: 'AgentGateway: expose order-lookup for A2A (called by support-triage)'
+      config:
+        agentName: order-lookup
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        agentServiceHost: retail-returns-order-lookup.kagent-system.svc.cluster.local
+      clusters:
+        - name: east
+
+    - name: agentgateway-a2a-route
+      description: 'AgentGateway: expose fraud-check for A2A (called by order-lookup)'
+      config:
+        agentName: fraud-check
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        agentServiceHost: retail-returns-fraud-check.kagent-system.svc.cluster.local
+      clusters:
+        - name: east
+
+    - name: agentgateway-a2a-route
+      description: 'AgentGateway: expose refund-approval for A2A (called by fraud-check) -- runs on west'
+      config:
+        agentName: refund-approval
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        # Cross-cluster host -- refund-approval's kagent Runtime is on west; its
+        # Service is marked global by the global-service step above (Step 4b), same
+        # pattern already proven live by loyalty-rewards-mcp's own cross-cluster
+        # Backend (Step 3c).
+        agentServiceHost: retail-returns-refund-approval.kagent-system.mesh.internal
+      clusters:
+        - name: east
+
+    # ── Step 6 (Stage 2 + 3): Customer token exchange on both the MCP and A2A paths ─
+    - name: token-exchange-policy
+      description: 'AgentGateway: validate + exchange the customer JWT before it reaches retail-returns MCP servers and downstream agents'
+      config:
+        policyName: retail-returns-customer-token-exchange
+        namespace: agentgateway-proxy
+        targetHTTPRoute: retail-returns-agentregistry-delegate
+        # Must match the serverName values from the agentregistry-catalog steps above.
+        # carrier is intentionally excluded -- it's gated by its own Stage 9
+        # entElicitation policy, not this standard customer-JWT exchange. The
+        # *-delegated entries (Step 3d) are also excluded on purpose -- they're a
+        # second catalog of these same 3 servers under a separate, policy-free route
+        # for order-lookup/fraud-check's own kagent-SDK-exchanged delegation calls
+        # (see Step 1b); this policy covers only the original entries support-triage
+        # and everyone else use.
+        mcpServerNames: [order-db, payment, shipping, inventory, fraud-scoring, loyalty-rewards]
+        # Must match the agentName values from the agentgateway-a2a-route steps
+        # above, so identity exchange also covers every A2A hop (Stage 3).
+        a2aAgentNames: [order-lookup, fraud-check, refund-approval]
+        jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/retail-returns-customers'
+        keycloak:
+          namespace: keycloak
+        jwksPath: /realms/retail-returns-customers/protocol/openid-connect/certs
+        exchangePath: /realms/retail-returns-customers/protocol/openid-connect/token
+        clientId: retail-returns-ui
+        clientSecret: retail-returns-ui-secret
+      clusters:
+        - name: east
+
+    # ── Step 7 (Stage 5 + 11a): stage-policy-controller, an internal service
+    # the UI uses to apply/remove a stage's policy on demand ("Apply policy" /
+    # "Remove policy" buttons), rather than pre-provisioning it. Stage 5's Deny
+    # blocks refund_payment for any customer, so applying it early would also
+    # affect Stage 4's elicitation flow. Stage 11a's AccessPolicy is a blanket
+    # ALLOW gate on the whole fraud-check Agent -- pre-provisioned, it also
+    # rejected the unauthenticated .well-known/agent-card.json fetch every A2A
+    # call makes first (503 "agent card invalid JSON" on
+    # Stage 3's order_lookup -> fraud_check handoff, for every caller, not just
+    # non-demo-customer ones). Clickops keeps both changes tied to a
+    # deliberate presenter action instead of silently breaking an earlier stage.
+    - name: stage-policy-controller
+      description: "AgentGateway: deploy stage-policy-controller (clickops apply/remove for Stage 5's tool-policy Deny and Stage 11a's AccessPolicy)"
+      config:
+        image: '{{env.images.retailReturns.stagePolicyController}}'
+        namespace: retail-returns
+        backendDiscoveryNamespace: agentregistry-system
+        managedPolicyNames:
+          - retail-returns-refund-identity-deny
+        accessPolicyNamespace: kagent-system
+        managedAccessPolicyNames:
+          - retail-returns-fraud-check-jwt-claim
+        env:
+          KEYCLOAK_ISSUER_URL: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/retail-returns-customers'
+          DEMO_CUSTOMER_USERNAME: demo-customer
+        # Read-only references for the Stage 6/7 "View policy spec" panes --
+        # these policies are created elsewhere, not managed by this service.
+        readOnlyRefs:
+          - resource: enterpriseagentgatewaybudgets
+            name: retail-returns-customer-budgets
+            namespace: agentgateway-proxy
+          - resource: enterpriseagentgatewaypolicies
+            name: retail-returns-budget-enforcement
+            namespace: agentgateway-proxy
+          - resource: enterpriseagentgatewaypolicies
+            name: retail-returns-pii-guardrail
+            namespace: agentregistry-system
+          # Stage 11b's AccessPolicy view (Step 16 below) -- a different CRD
+          # group, kagent's own, not AgentRegistry-managed. Stage 11a's own
+          # AccessPolicy is managedAccessPolicyNames above instead, now that
+          # it's apply/remove-able rather than just viewable.
+          - resource: accesspolicies
+            name: retail-returns-deny-override-return-window
+            namespace: kagent-system
+            apiGroup: policy.kagent-enterprise.solo.io
+      clusters:
+        - name: east
+
+    # ── Step 8 (Stage 5): Progressive disclosure -- exposes order-db-mcp a
+    # second time via entMcp.codeMode, collapsing its tool catalog into one
+    # code-execution meta-tool instead of N individually-described tool
+    # schemas. Deliberately unauthenticated (unlike ORDER_DB_MCP_URL's
+    # Strict-JWT route above): this route exists only for the UI's
+    # "Progressive disclosure" card to live-query both routes' tool lists
+    # side by side, not for any agent to actually call.
+    - name: mcp-codemode-route
+      description: 'AgentGateway: expose order-db-mcp via entMcp.codeMode for the progressive-disclosure comparison'
+      config:
+        serverName: order-db
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        mcpServiceHost: order-db-workload.kagent-system.svc.cluster.local
+      clusters:
+        - name: east
+
+    # ── Step 9 (Stage 6): Budget control -- two demo customers, one Blocked and
+    # one Audited when their LLM spend limit is hit. Keyed on customer email
+    # rather than their Keycloak ID, which isn't known ahead of deploy time ──
+    - name: budget-policy
+      description: 'AgentGateway: per-customer LLM spend budgets on the openai backend (Block on Tokens for demo-customer, Audit on USD for demo-customer-2)'
+      config:
+        policyName: retail-returns-budget-enforcement
+        budgetName: retail-returns-customer-budgets
+        namespace: agentgateway-proxy
+        llmHttpRoute: openai
+        discoveryFrom: Same
+        # Validates the customer's JWT so the budget dimension can read their email.
+        jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/retail-returns-customers'
+        jwksPath: /realms/retail-returns-customers/protocol/openid-connect/certs
+        keycloak:
+          namespace: keycloak
+        budgets:
+          - name: demo-customer-token-cap
+            subject: { customerEmail: 'demo-customer@example.com' }
+            limit: { amount: 200, unit: Tokens }
+            window: { unit: Day }
+            onBudgetExceeded: Block
+          - name: demo-customer-2-dollar-cap
+            subject: { customerEmail: 'demo-customer-2@example.com' }
+            limit: { amount: 1, unit: USD }
+            window: { unit: Day }
+            onBudgetExceeded: Audit
+      clusters:
+        - name: east
+
+    # ── Step 10 (Stage 7): PII masking -- redacts email/phone from order-db's
+    # real tool results before they reach the agent chain ─────────────────────
+    - name: pii-guardrail-policy
+      description: 'AgentGateway: redact PII (email/phone) from order-db-mcp tool results via an ExtMcp CheckResponse hook'
+      config:
+        image: '{{env.images.retailReturns.piiGuardrail}}'
+        mcpServerName: order-db
+        namespace: agentgateway-proxy
+        backendDiscoveryNamespace: agentregistry-system
+        policyName: retail-returns-pii-guardrail
+      clusters:
+        - name: east
+
+    # ── Step 11: Public exposure -- retail-returns-ui gated behind Keycloak
+    # login. Uses its own Gateway, so it has no effect on the MCP/A2A/LLM
+    # traffic set up by the steps above ────────────────────────────────────────
+    - name: oidc-gateway
+      description: 'AgentGateway: gate retail-returns-ui behind Keycloak login (OIDC ExtAuth)'
+      config:
+        namespace: retail-returns
+        hostname: '{{env.domains.app.retailReturns}}'
+        gatewayName: retail-returns-ui-https
+        routeName: retail-returns-ui
+        ambientEnabled: true
+        sourceRanges:
+          - '{{env.security.vpnSourceRanges}}'
+        backend:
+          name: retail-returns-ui
+          port: 80
+        oidc:
+          # Same client used for token exchange elsewhere -- a separate client
+          # here caused token exchange to fail.
+          clientId: retail-returns-ui
+          clientSecret: retail-returns-ui-secret
+          issuerUrl: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/retail-returns-customers'
+          # Lets Stage 2 use this login instead of doing its own.
+          forwardAccessTokenHeader: X-Retail-Returns-Customer-Token
+          # Stage 1's Logout button navigates here -- ext-auth-service intercepts this
+          # path itself (never forwarded to retail-returns-ui), revokes the token, ends
+          # the Keycloak SSO session server-side, then redirects back to the app root
+          # (afterLogoutUrl left unset -- defaults to appUrl).
+          logoutPath: /logout
+      clusters:
+        - name: east
+
+    # ── Step 12 (Stage 9): Catalog carrier-mcp (link_carrier_account) -- a
+    # dedicated server/Backend, not a tool on shipping-mcp, so agentgateway's
+    # whole-Backend entElicitation gate below can't affect shipping-mcp's
+    # get_shipment_status (called unconditionally by order-lookup as part of
+    # the existing Stage 3/4/6/7 A2A chain) ────────────────────────────────────
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: catalog carrier-mcp (link_carrier_account)'
+      config:
+        serverName: carrier
+        title: 'Carrier Service (gateway route)'
+        description: 'Third-party carrier account linking'
+        serviceName: carrier-workload
+        serviceNamespace: kagent-system
+        servicePort: 8080
+        mcpPath: /mcp
+        runtimeName: retail-returns-mcp-gateway
+        pathSuffix: /carrier
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 13 (Stage 9): agentgateway interactive elicitation -- gates
+    # carrier.linkCarrierAccount behind a real third-party OAuth consent grant
+    # (carrier-portal realm), independent of the RFC 8693 customer-identity
+    # exchange Step 6 provides for the other 5 servers ─────────────────────────
+    - name: mcp-elicitation-policy
+      description: 'AgentGateway: gate carrier.link_carrier_account behind carrier-portal OAuth consent (Stage 9)'
+      config:
+        policyName: retail-returns-carrier-elicitation
+        mcpServerName: carrier
+        backendDiscoveryNamespace: agentregistry-system
+        clientId: carrier-portal-ui
+        clientSecret: carrier-portal-ui-secret
+        redirectUri: 'https://{{env.domains.app.retailReturns}}/api/stage9/callback'
+        authorizeUrl: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/carrier-portal/protocol/openid-connect/auth'
+        accessTokenUrl: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/carrier-portal/protocol/openid-connect/token'
+      clusters:
+        - name: east
+
+    # ── Step 14 (Stage 11): kagent-native MCPServer for returns-eligibility ──
+    # Not AgentRegistry-catalogued like the other 6 MCP servers -- kagent's own
+    # AccessPolicy (Step 16 below) only resolves a targetRef.kind: MCPServer
+    # against a real MCPServer.kagent.dev object.
+    - name: kagent-mcp-server
+      description: 'kagent: deploy returns-eligibility as a native MCPServer (check_return_window, override_return_window)'
+      config:
+        serverName: returns-eligibility
+        namespace: kagent-system
+        image: '{{env.images.retailReturns.returnsEligibility}}'
+      clusters:
+        - name: east
+
+    # ── Step 14b (Stage 11): two test-harness Deployments reusing the real
+    # fraud-check/order-lookup agents' own ServiceAccounts, calling
+    # returns-eligibility directly (no gateway hop) so Step 16's Agent-kind
+    # AccessPolicy has a real SPIFFE identity to discriminate by. Deploys into
+    # kagent-system, an existing addon-owned namespace -- this feature never
+    # creates or labels that namespace itself.
+    - name: access-policy-test-harness
+      description: 'kagent: deploy order-lookup/fraud-check identity test harnesses for returns-eligibility (Stage 11)'
+      config:
+        namespace: kagent-system
+        image: '{{env.images.retailReturns.accessPolicyTestHarness}}'
+        targetUrl: http://returns-eligibility.kagent-system.svc.cluster.local:8080/mcp
+        identities:
+          - name: order-lookup
+            serviceAccountName: retail-returns-order-lookup
+          - name: fraud-check
+            serviceAccountName: retail-returns-fraud-check
+      clusters:
+        - name: east
+
+    # Step 15 (Stage 11a)'s AccessPolicy moved to stage-policy-controller (Step 7)
+    # above -- clickops apply/remove now, not pre-provisioned. See that step's
+    # own comment for why (it broke Stage 3's A2A handoff for every caller).
+
+    # ── Step 16 (Stage 11b): AccessPolicy, tool-specific DENY -- order-lookup
+    # may still call check_return_window, but not override_return_window;
+    # fraud-check (this chain's legitimate caller) is unaffected. Agent-kind
+    # subject is correct here (unlike Step 15): the test harnesses call
+    # returns-eligibility directly, no intermediate gateway hop to flatten
+    # their identity.
+    - name: kagent-access-policy
+      description: 'kagent: deny order-lookup override_return_window, allow check_return_window (Stage 11b, tool-specific)'
+      config:
+        policyName: retail-returns-deny-override-return-window
+        namespace: kagent-system
+        action: DENY
+        subjects:
+          - kind: Agent
+            name: retail-returns-order-lookup
+            namespace: kagent-system
+        targetKind: MCPServer
+        targetName: returns-eligibility
+        tools: [override_return_window]
+      clusters:
+        - name: east
+
+  tests:
+    - name: retail-returns-ui-public-endpoint-alive
+      description: retail-returns-ui's public hostname resolves in DNS and responds
+      steps:
+        - action: check-public-endpoint
+          hostname: '{{env.domains.app.retailReturns}}'
+          protocol: https
+          path: /

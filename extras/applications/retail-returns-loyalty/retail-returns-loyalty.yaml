@@ -1,0 +1,77 @@
+---
+# Retail Returns — loyalty-rewards-mcp, deployed into the retail-returns-west
+# namespace on the WEST cluster (Phase 10, multicluster). A plain Deployment
+# + Service, same shape as the other MCP servers in
+# extras/applications/retail-returns-agent-system/retail-returns-agent-system.yaml
+# (which is east-only, by its own header comment) -- kept as a separate
+# application manifest specifically because it targets a different cluster.
+#
+# Cataloged into east's AgentRegistry by the retail-returns-demo usecase's
+# agentregistry-catalog step with an explicit cross-cluster config.url
+# (spoke-agentgateway-proxy.agentgateway-proxy.mesh.internal), not provisioned
+# by this manifest.
+#
+# Image tag comes from config/environments/<env>.yaml's images.retailReturns.loyaltyRewards
+# (see aws-dev.yaml) -- bump the version there, not here.
+#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: retail-returns
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    app.kubernetes.io/part-of: retail-returns
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loyalty-rewards-mcp
+  namespace: retail-returns
+  labels:
+    app: loyalty-rewards-mcp
+    app.kubernetes.io/part-of: retail-returns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loyalty-rewards-mcp
+  template:
+    metadata:
+      labels:
+        app: loyalty-rewards-mcp
+    spec:
+      containers:
+        - name: server
+          image: '{{env.images.retailReturns.loyaltyRewards}}'
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: { memory: '64Mi', cpu: '50m' }
+            limits: { memory: '128Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loyalty-rewards-mcp
+  namespace: retail-returns
+  labels:
+    app: loyalty-rewards-mcp
+    app.kubernetes.io/part-of: retail-returns
+spec:
+  selector:
+    app: loyalty-rewards-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      appProtocol: http
+  type: ClusterIP

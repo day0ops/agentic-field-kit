@@ -1,0 +1,13 @@
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: tracing-solo-ui
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    agentic.demo/feature: solo-ui
+spec:
+  tracing:
+    - providers:
+        - name: solo-enterprise-telemetry-collector
+      randomSamplingPercentage: 100

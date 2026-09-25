@@ -1,0 +1,21 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: aks-multi-cluster
+  description: AKS multi-cluster setup (management, east, west)
+
+spec:
+  provider: aks
+  region: West US 2
+  settings:
+    nodes:
+      desired: 2
+      type: Standard_D2_v2
+
+  clusters:
+    - name: east
+      role: workload
+      region: East US 2
+    - name: west
+      role: workload
+      region: West Europe

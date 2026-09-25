@@ -1,0 +1,611 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: eks-multi-cluster-peering-with-agentic-hub-spoke-spire
+  description: |
+    Agents run on Bedrock AgentCore runtime with agentregistry integration. Multicluster ambient mesh (helm peering) with SPIRE workload identity.
+    Global: cilium, cert-manager, spire.
+    East: external-dns, keycloak, telemetry gateway, solo-ui (mgmt), enterprise agentgateway running as hub, enterprise agentregistry, enterprise kagent.
+    West: telemetry agent, solo-ui relay, enterprise agentgateway as spoke.
+
+spec:
+  infra: eks-multi-cluster
+  environment: aws-dev
+
+  mesh:
+    istioVersion: 1.30.3
+    gatewayApiVersion: v1.5.0
+    profile: ambient
+    peering: helm
+
+    image:
+      istioRepo: us-docker.pkg.dev/soloio-img/istio
+      helmIstioRepo: us-docker.pkg.dev/soloio-img/istio-helm
+      tag: 1.30.3-solo
+
+    components:
+      - name: base
+        values:
+          defaultRevision: ''
+
+      - name: istiod
+        values:
+          env:
+            # disables trust domain validation when generating xDS config, set when different domains (false)
+            PILOT_SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+            # enables new IP autoallocation controller for ServiceEntry resources lacking user-supplied addresses (true)
+            PILOT_ENABLE_IP_AUTOALLOCATE: 'true'
+            # disables legacy remote-secrets-based multicluster entirely (true)
+            DISABLE_LEGACY_MULTICLUSTER: 'true'
+            # ----- optional -----
+            # gate for entire debug endpoint auth system. When false: all /debug/* endpoints open to any caller, no SPIFFE check, no namespace restriction. related to DEBUG_ENDPOINT_AUTH_ALLOWED_NAMESPACES (true)
+            ENABLE_DEBUG_ENDPOINT_AUTH: 'true'
+            # needs full access to istiod debug endpoints to function
+            DEBUG_ENDPOINT_AUTH_ALLOWED_NAMESPACES: 'gloo-mesh'
+            # allows Kubernetes Service selectors to match WorkloadEntry resources (not just pods) (true)
+            PILOT_ENABLE_K8S_SELECT_WORKLOAD_ENTRIES: 'true'
+          global:
+            multiCluster:
+              clusterName: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+            proxy:
+              clusterDomain: cluster.local
+          gateways:
+            spire:
+              workloads: true
+          meshConfig:
+            accessLogFile: /dev/stdout
+            trustDomain: '{{cluster.name}}.local'
+            enableTracing: true
+            extensionProviders:
+              - name: ambient-tracing
+                opentelemetry:
+                  port: 4317
+                  service: '{{env.internal.telemetry.otelTracesCollector}}'
+            defaultConfig:
+              proxyMetadata:
+                # tells the sidecar/agent to intercept DNS queries
+                ISTIO_META_DNS_CAPTURE: 'true'
+          pilot:
+            cni:
+              namespace: istio-system
+              enabled: true
+          platforms:
+            # activates push-based multicluster peering system in istiod
+            peering:
+              enabled: true
+
+      - name: cni
+        values:
+          ambient:
+            dnsCapture: true
+          excludeNamespaces:
+            - istio-system
+            - kube-system
+
+      - name: ztunnel
+        values:
+          env:
+            # enables L7 observability feature (false)
+            L7_ENABLED: 'true'
+            # start DNS proxy
+            ISTIO_META_DNS_CAPTURE: 'true'
+            # disables trust domain validation when generating xDS config, set when different domains (false)
+            SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+            # disable in EKS environments
+            IPV6_ENABLED: false
+          spire:
+            enabled: true
+          l7Telemetry:
+            distributedTracing:
+              otlpEndpoint: 'http://{{env.internal.telemetry.otelTracesCollector}}:4317'
+          configValidation: true
+          istioNamespace: istio-system
+          namespace: istio-system
+          multiCluster:
+            clusterName: '{{cluster.name}}'
+          network: '{{cluster.name}}'
+          proxy:
+            clusterDomain: cluster.local
+          terminationGracePeriodSeconds: 29
+          variant: distroless
+
+      # SPIRE_ENABLED=false is intentional: Solo's SPIRE docs never register the
+      # east-west gateway with SPIRE, and ztunnel's gateway-mode SPIRE client
+      # (dedicated_ca_client.rs) has a confirmed DER/PEM parsing bug. Cross-cluster
+      # mTLS works because each cluster's independent SPIRE root is federated with
+      # istiod's shared cacerts root and every peer cluster's SPIRE root
+      # (distinctRoots: true, see addons/spire/index.js).
+      - name: peering-eastwest
+        values:
+          eastwest:
+            cluster: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+            deployment:
+              spec:
+                template:
+                  spec:
+                    containers:
+                      - name: istio-proxy
+                        env:
+                          - name: SPIRE_ENABLED
+                            value: 'false'
+
+      # peering remote
+      - name: peering-remote
+        values:
+          trustDomain: '{{cluster.name}}.local'
+          addressType: Hostname
+          preferredDataplaneServiceType: LoadBalancer
+
+    certificates:
+      mode: self-signed
+
+  addons:
+    clusters:
+      - name: east
+        addons:
+          - name: external-dns
+            description: Automatic DNS record management via Route53
+            namespace: external-dns
+            version: 1.21.1
+            config:
+              provider: route53
+              domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+              region: '{{env.aws.region}}'
+              txtOwnerId: '{{env.dns.txtOwnerId}}'
+
+          - name: keycloak
+            description: Keycloak OIDC provider
+            phase: post
+            namespace: keycloak
+            keycloakImage: '{{env.keycloak.image}}'
+            postgresVersion: 18.2-alpine
+            config:
+              postgres:
+                persistentVolume:
+                  storageClass: gp3
+                  size: 5Gi
+              hostname: '{{env.domains.core.keycloak}}'
+              loginTheme: '{{env.keycloak.loginTheme}}'
+              tls:
+                enabled: true
+                createCertificate: true
+                clusterIssuerName: letsencrypt-dns
+                organization: solo.io
+              soloUiClients:
+                enabled: true
+                realm: solo-ui
+                hostname: 'https://{{env.domains.core.soloUi}}'
+                additionalHostnames:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+                  - 'https://{{env.domains.core.agentgatewayUi}}'
+                  - 'https://{{env.domains.core.meshUi}}'
+                backendClientId: solo-ui-backend
+                backendClientSecret: solo-ui-backend-secret
+                frontendClientId: solo-ui-frontend
+              realms:
+                - realm: agentregistry
+                  groups:
+                    - admins
+                  clients:
+                    - clientId: ar-backend
+                      type: confidential
+                      clientSecret: ar-backend-secret
+                      flows: []
+                    - clientId: ar-cli
+                      type: public
+                      flows:
+                        - device
+                        - direct-access
+                      groupMembership: true
+                      audience: ar-backend
+                    - clientId: ar-ui
+                      type: public
+                      flows:
+                        - authorization-code
+                      clientAttributes:
+                        pkce.code.challenge.method: S256
+                      groupMembership: true
+                      audience: ar-backend
+                      redirectUris:
+                        - 'https://{{env.domains.core.agentregistryUi}}/*'
+                      postLogoutRedirectUris:
+                        - 'https://{{env.domains.core.agentregistryUi}}'
+                  users:
+                    - username: admin-user
+                      email: admin-user@example.com
+                      firstName: Admin
+                      lastName: User
+                      memberOf:
+                        - admins
+                  # password sourced from AGENTREGISTRY_REALM_DEFAULT_PASSWORD, not this profile
+
+                - realm: grafana
+                  groups:
+                    - grafana-admins
+                  clients:
+                    - clientId: grafana
+                      type: confidential
+                      clientSecret: grafana-client-secret
+                      flows:
+                        - authorization-code
+                      groupMembership: true
+                      redirectUris:
+                        - 'https://{{env.domains.core.grafana}}/login/generic_oauth'
+                      postLogoutRedirectUris:
+                        - 'https://{{env.domains.core.grafana}}'
+                  users:
+                    # username/password sourced from GRAFANA_REALM_ADMIN_USERNAME (default:
+                    # grafana-admin) and GRAFANA_REALM_ADMIN_PASSWORD, not this profile
+                    - email: grafana-admin@example.com
+                      firstName: Grafana
+                      lastName: Admin
+                      memberOf:
+                        - grafana-admins
+
+                - realm: kagent
+                  groups:
+                    - kagent-admins
+                    - kagent-writers
+                    - kagent-readers
+                    - agentregistry
+                  clients:
+                    - clientId: agentregistry
+                      type: confidential
+                      clientSecret: agentregistry-secret
+                      flows:
+                        - service-account
+                      groupMembership: true
+                      serviceAccountGroup: agentregistry
+                    - clientId: kagent-backend
+                      type: confidential
+                      clientSecret: kagent-backend-secret
+                      flows:
+                        - authorization-code
+                      groupMembership: true
+                      redirectUris:
+                        - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+                        - 'https://{{env.domains.core.agentgatewayUi}}/*'
+                        - 'https://{{env.domains.core.meshUi}}/*'
+                        - 'https://{{env.domains.core.soloUi}}/*'
+                      postLogoutRedirectUris:
+                        - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+                        - 'https://{{env.domains.core.agentgatewayUi}}'
+                        - 'https://{{env.domains.core.meshUi}}'
+                        - 'https://{{env.domains.core.soloUi}}'
+                    - clientId: kagent-ui
+                      type: public
+                      flows:
+                        - authorization-code
+                      clientAttributes:
+                        pkce.code.challenge.method: S256
+                      groupMembership: true
+                      audience: kagent-backend
+                      redirectUris:
+                        - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+                        - 'https://{{env.domains.core.agentgatewayUi}}/*'
+                        - 'https://{{env.domains.core.meshUi}}/*'
+                        - 'https://{{env.domains.core.soloUi}}/*'
+                      postLogoutRedirectUris:
+                        - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+                        - 'https://{{env.domains.core.agentgatewayUi}}'
+                        - 'https://{{env.domains.core.meshUi}}'
+                        - 'https://{{env.domains.core.soloUi}}'
+                  users:
+                    - username: kagent-admin
+                      email: kagent-admin@example.com
+                      firstName: Kagent
+                      lastName: Admin
+                      memberOf:
+                        - kagent-admins
+                    - username: kagent-writer
+                      email: kagent-writer@example.com
+                      firstName: Kagent
+                      lastName: Writer
+                      memberOf:
+                        - kagent-writers
+                    - username: kagent-reader
+                      email: kagent-reader@example.com
+                      firstName: Kagent
+                      lastName: Reader
+                      memberOf:
+                        - kagent-readers
+                  # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile
+
+                - realm: finflow
+                  customAttributes:
+                    - role
+                  clients:
+                    - clientId: finflow-bff
+                      type: confidential
+                      clientSecret: finflow-bff-secret
+                      flows:
+                        - authorization-code
+                      redirectUris:
+                        - 'https://{{env.domains.app.main}}/*'
+                      postLogoutRedirectUris:
+                        - 'https://{{env.domains.app.main}}'
+                  users:
+                    - username: morgan
+                      firstName: Morgan
+                      lastName: Chen
+                      email: morgan@finflow.demo
+                      attributes:
+                        role: trader
+                    - username: alex
+                      firstName: Alex
+                      lastName: Rivera
+                      email: alex@finflow.demo
+                      attributes:
+                        role: analyst
+                  defaultPassword: Admin1234
+
+          - name: telemetry
+            phase: post
+            namespace: telemetry
+            chartVersions:
+              kube-prom-stack: 88.0.1
+              loki: 7.2.0
+              tempo: 1.61.3
+              alloy: 1.11.0
+              otel: 0.165.0
+            config:
+              database:
+                storageClass: gp3
+                storageSize: 100Gi
+              globalExport: true
+              soloUiNamespace: solo-enterprise
+              grafanaHostname: '{{env.domains.core.grafana}}'
+              grafanaTls:
+                enabled: true
+                secretName: grafana-tls
+                issuer: letsencrypt-dns
+              grafanaOidc:
+                enabled: true
+                issuerUrl: 'https://{{env.domains.core.keycloak}}/realms/grafana'
+                clientId: grafana
+                clientSecret: grafana-client-secret
+                adminGroup: grafana-admins
+
+          # agentgateway must install before solo-ui: solo-ui's productAliases
+          # (below) apply EnterpriseAgentgatewayPolicy resources, a CRD only
+          # agentgateway's own install brings onto the cluster. Confirmed live
+          # (2026-09-03): "no matches for kind EnterpriseAgentgatewayPolicy"
+          # when solo-ui ran first.
+          - name: agentgateway
+            description: AI Gateway Enterprise hub
+            phase: post
+            namespace: agentgateway-system
+            version: '{{env.agentgateway.version}}'
+            config:
+              enterprise: true
+              ambientEnabled: true
+              soloUiNamespace: solo-enterprise
+              tracesCollectorName: opentelemetry-collector-traces
+              tracesCollectorNamespace: telemetry
+              tracingRandomSampling: true
+              gateway:
+                name: hub-agentgateway-proxy
+                namespace: agentgateway-proxy
+                hostname: '{{env.domains.app.main}}'
+                port: 80
+                protocol: HTTP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+          - name: solo-ui
+            description: Solo Enterprise UI
+            mode: management
+            version: '{{env.soloUi.version}}'
+            phase: post
+            namespace: solo-enterprise
+            config:
+              telemetryNamespace: telemetry
+              hostname: '{{env.domains.core.soloUi}}'
+              tls:
+                enabled: true
+                secretName: solo-ui-tls
+                issuer: letsencrypt-dns
+              oidc:
+                enabled: true
+                # Must match kagent-enterprise chart's oidc.issuer — both charts must use
+                # the same realm so the management UI's forwarded tokens are accepted by
+                # the kagent controller when proxying /api/proxy/cluster/<cluster>/api/*
+                issuerUrl: 'https://{{env.domains.core.keycloak}}/realms/kagent'
+                backendClientId: kagent-backend
+                backendClientSecret: kagent-backend-secret
+                frontendClientId: kagent-ui
+              # Maps Keycloak groups (kagent realm) → Solo UI roles.
+              # Users in these groups get the corresponding Solo UI permission level.
+              # Requires keycloak addon to have created the kagent realm with these groups.
+              # Default fallback (if omitted): admins/readers/writers → global.Admin/Reader/Writer
+              rbacRoleMappings:
+                kagent-admins: global.Admin
+                kagent-writers: global.Writer
+                kagent-readers: global.Reader
+              clickhouse:
+                persistentVolume:
+                  storageClass: gp3
+                  size: 100Gi
+              products:
+                mesh:
+                  enabled: true
+                agentgateway:
+                  enabled: true
+                  namespace: agentgateway-system
+                kagent:
+                  enabled: true
+                  namespace: kagent-system
+              # Real per-product hostnames: the in-app product switcher is dead code in
+              # production builds, so each product needs its own URLRewrite alias rather
+              # than relying on it.
+              productAliases:
+                - product: kagent
+                  hostname: '{{env.domains.core.kagentUi}}'
+                - product: agentgateway
+                  hostname: '{{env.domains.core.agentgatewayUi}}'
+                - product: mesh
+                  hostname: '{{env.domains.core.meshUi}}'
+
+          - name: agentregistry
+            description: Solo Enterprise agentregistry
+            phase: post
+            namespace: agentregistry-system
+            version: '{{env.agentregistry.version}}'
+            config:
+              enterprise: true
+              hostname: '{{env.domains.core.agentregistryUi}}'
+              tls:
+                secretName: agentregistry-tls
+                issuer: letsencrypt-dns
+              oidc:
+                keycloakHostname: '{{env.domains.core.keycloak}}'
+                keycloakTlsEnabled: true
+                realm: agentregistry
+                clientId: ar-backend
+                clientSecret: ar-backend-secret
+                publicClientId: ar-ui
+                roleClaim: Groups
+                superuserRole: admins
+              kagentOutboundOidc:
+                keycloakHostname: '{{env.domains.core.keycloak}}'
+                keycloakTlsEnabled: true
+                realm: kagent
+                clientId: agentregistry
+                clientSecret: agentregistry-secret
+              # agentcore.enabled: true runs the full AWS AgentCore setup:
+              #   IAM user + policies → helm credentials → arctl runtime setup
+              #   → CloudFormation (cross-account role) → arctl Runtime apply
+              agentcore:
+                enabled: true
+                iamUserName: agentregistry-agentcore
+                stackName: agentregistry-agentcore
+                runtimeName: aws-agentcore
+                region: '{{env.aws.region}}'
+                telemetryEndpoint: 'https://{{env.domains.core.agentregistryTelemetry}}'
+                networkId: '{{infra.clusters.east.network.vpcId}}'
+                privateSubnetId: '{{infra.clusters.east.network.privateSubnetIds[0]}}'
+                securityGroupIds:
+                  - '{{infra.clusters.east.network.workerSgId}}'
+                arctl:
+                  version: v2026.5.4
+                  clientId: ar-cli
+              otelGateway:
+                enabled: true
+                hostname: '{{env.domains.core.agentregistryTelemetry}}'
+                upstreamEndpoint: '{{env.internal.agentregistry.telemetryEndpoint}}'
+                tls:
+                  secretName: agentregistry-telemetry-tls
+                  issuer: letsencrypt-dns
+
+          - name: kagent
+            description: Solo Enterprise for kagent AI agent platform
+            phase: post
+            namespace: kagent-system
+            version: '{{env.kagent.version}}'
+            config:
+              enterprise: true
+              oidc:
+                keycloakHostname: '{{env.domains.core.keycloak}}'
+                keycloakTlsEnabled: true
+                realm: kagent
+                clientId: kagent-backend
+                clientSecret: kagent-backend-secret
+              rbac:
+                adminsGroup: kagent-admins
+                writersGroup: kagent-writers
+                readersGroup: kagent-readers
+              provider:
+                type: openAI
+              otel:
+                endpoint: '{{env.internal.telemetry.otelTracesCollector}}:4317'
+              database:
+                storageClass: gp3
+
+      - name: west
+        addons:
+          - name: telemetry
+            phase: post
+            namespace: telemetry
+            chartVersions:
+              alloy: 1.11.0
+              otel: 0.165.0
+            config:
+              mode: agent
+              otelGatewayEndpoint: '{{env.internal.telemetry.otelGatewayEndpoint}}:4317'
+              lokiPushUrl: '{{env.internal.telemetry.lokiPushUrl}}'
+
+          - name: solo-ui
+            mode: relay
+            phase: post
+            version: '{{env.soloUi.version}}'
+            namespace: solo-enterprise
+            config:
+              tunnel:
+                fqdn: '{{env.internal.soloUi.tunnelFqdn}}'
+                port: 9000
+              telemetry:
+                fqdn: '{{env.internal.soloUi.telemetryFqdn}}'
+              # Relay chart's validation.yaml requires at least one products.*.enabled=true.
+              products:
+                mesh:
+                  enabled: true
+                agentgateway:
+                  enabled: true
+                  namespace: agentgateway-system
+
+          - name: agentgateway
+            description: AI Gateway Enterprise spoke
+            phase: post
+            namespace: agentgateway-system
+            version: '{{env.agentgateway.version}}'
+            config:
+              enterprise: true
+              ambientEnabled: true
+              globalGateway: true
+              soloUiNamespace: solo-enterprise
+              tracingRandomSampling: true
+              gateway:
+                name: spoke-agentgateway-proxy
+                namespace: agentgateway-proxy
+                port: 80
+                protocol: HTTP
+                serviceType: ClusterIP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+    global:
+      # cilium (the CNI) must install before spire — spire's DaemonSets/StatefulSet
+      # can't schedule pods without working pod networking, and pre-phase addons
+      # install in this list's order with no dependency-aware reordering.
+      - name: cilium
+        description: eBPF-based CNI in chaining mode for network policy and observability
+        version: 1.19.4
+        config:
+          mode: chaining
+          chainingTarget: aws-cni
+          enableHealthProbePolicy: true
+
+      - name: cert-manager
+        description: Certificate management for TLS
+        version: 1.20.2
+        namespace: cert-manager
+        config:
+          letsencrypt:
+            enabled: true
+            email: '{{env.acme.email}}'
+            region: '{{env.aws.region}}'
+
+      - name: spire
+        description: SPIRE workload identity for ztunnel and ambient workloads
+        phase: pre
+        config:
+          certMode: self-signed
+          trustDomain: '{{cluster.name}}.local'
+          # Each cluster gets its own independent root (pre-generated by
+          # SpireRootManager before either cluster installs), federated with
+          # istiod's cacerts root and every peer's root (see addons/spire/index.js).
+          distinctRoots: true

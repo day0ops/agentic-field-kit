@@ -1,0 +1,93 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: egress-mtls-per-app
+  description: '[Enterprise alpha] Per-app mTLS egress identity mapping via shared egress waypoint. Maps internal SPIFFE identity to external client certs per service account.'
+spec:
+  category: security
+  requires:
+    applications:
+      - name: httpbin
+        namespace: httpbin
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+
+  features:
+    - name: egress-waypoint
+      description: Deploy shared egress waypoint
+      config:
+        waypointName: egress-waypoint
+        namespace: egress
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: service-entry
+      description: Register external mTLS service
+      config:
+        entryName: external-mtls-service
+        namespace: egress
+        hosts:
+          - external-mtls.example.com
+        location: MESH_EXTERNAL
+        resolution: DNS
+        ports:
+          - number: 443
+            name: https
+            protocol: TLS
+        waypointName: egress-waypoint
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: header-routing
+      description: Route per-app based on source principal header
+      config:
+        routeName: egress-per-app-routing
+        namespace: egress
+        waypointName: egress-waypoint
+        rules:
+          - matches:
+              - headers:
+                  - name: x-source-principal
+                    value: cluster.local/ns/httpbin/sa/httpbin
+            backendRefs:
+              - name: external-mtls-httpbin
+                port: 443
+          - backendRefs:
+              - name: external-mtls-default
+                port: 443
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: destination-rule
+      description: mTLS origination with app-specific client cert
+      config:
+        ruleName: external-mtls-httpbin
+        namespace: egress
+        host: external-mtls-httpbin
+        trafficPolicy:
+          tls:
+            mode: MUTUAL
+            clientCertificate: /etc/certs/httpbin/client.pem
+            privateKey: /etc/certs/httpbin/key.pem
+            caCertificates: /etc/certs/httpbin/ca.pem
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: egress-mtls-connectivity
+      description: Verify per-app mTLS egress connectivity to external service
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: exec
+          command: kubectl exec deploy/httpbin -n httpbin -- curl -s -o /dev/null -w '%{http_code}' https://external-mtls.example.com
+          timeout: 30s
+        - action: verify
+          expect:
+            contains: '200'

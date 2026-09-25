@@ -1,0 +1,118 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: multicluster-egress
+  description: Combine global mesh connectivity with a shared egress gateway for centralized outbound traffic control
+spec:
+  category: multicluster
+  clusters:
+    - name: WEST
+      infra: eks-ipv6
+    - name: EAST
+      infra: eks-ipv6
+  requires:
+    applications:
+      - name: httpbin
+        namespace: httpbin
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+          - name: EAST
+            infra: eks-ipv6
+
+  features:
+    - name: eastwest-gateway
+      description: Deploy east-west gateways on all clusters
+      config:
+        namespace: istio-eastwest
+        method: istioctl
+        clusters:
+          - name: WEST
+            context: '{{WEST_CONTEXT}}'
+          - name: EAST
+            context: '{{EAST_CONTEXT}}'
+
+    - name: cluster-link
+      description: Link clusters
+      config:
+        namespace: istio-eastwest
+        verify: true
+        clusters:
+          - name: WEST
+            context: '{{WEST_CONTEXT}}'
+          - name: EAST
+            context: '{{EAST_CONTEXT}}'
+
+    - name: global-service
+      description: Make httpbin globally accessible
+      config:
+        namespace: httpbin
+        services:
+          - name: httpbin
+            scope: global
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+        - name: EAST
+          infra: eks-ipv6
+
+    - name: egress-waypoint
+      description: Deploy shared egress waypoint on WEST
+      config:
+        waypointName: egress-waypoint
+        namespace: egress
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: service-entry
+      description: Register external service
+      config:
+        entryName: external-api
+        namespace: egress
+        hosts:
+          - httpbin.org
+        location: MESH_EXTERNAL
+        resolution: DNS
+        ports:
+          - number: 80
+            name: http
+            protocol: HTTP
+        waypointName: egress-waypoint
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: egress-authorization
+      description: Allow httpbin to access external service
+      config:
+        policyName: allow-httpbin-egress
+        namespace: egress
+        waypointName: egress-waypoint
+        action: ALLOW
+        rules:
+          - from:
+              - source:
+                  namespaces:
+                    - httpbin
+            to:
+              - operation:
+                  hosts:
+                    - httpbin.org
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: egress-from-west
+      description: Verify egress traffic from WEST cluster through shared egress gateway
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: exec
+          command: kubectl exec deploy/httpbin -n httpbin -- curl -s -o /dev/null -w '%{http_code}' http://httpbin.org/get
+          timeout: 30s
+        - action: verify
+          expect:
+            contains: '200'

@@ -1,0 +1,98 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: agentregistry-mcp-demo
+  description: |
+    AgentRegistry MCP server discovery demo.
+    - Currency MCP server deployed on east cluster
+    - agentregistry Virtual Runtime wired to hub agentgateway
+    - Delegate HTTPRoute routes /registry traffic to agentregistry-system
+    - arctl login via Keycloak OIDC (ar-cli client, password-credentials)
+
+spec:
+  diagram: |
+    flowchart LR
+      Client([MCP Client]) -->|StreamableHTTP /registry| GW[hub-agentgateway-proxy\neast · agentgateway-proxy]
+      GW -->|delegate HTTPRoute| AR[agentregistry\nagentregistry-system]
+      AR -->|discovers| MCP[currency-server-mcp\nmcp-backend]
+
+  infra: eks-multi-cluster
+  category: multi-cluster
+
+  features:
+    # ── EAST ──────────────────────────────────────────────────────────────────
+
+    # Deploy currency MCP server
+    - name: mcp-server
+      description: Currency MCP server on east cluster
+      config:
+        serverName: currency-server
+        namespace: mcp-backend
+        image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/currency-server-mcp:0.1.1
+        port: 8000
+      clusters:
+        - name: east
+
+    # Wire agentregistry into hub gateway + create Virtual Runtime
+    - name: agentregistry-route
+      description: AgentRegistry delegate route on hub agentgateway
+      config:
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        agentregistryNamespace: agentregistry-system
+        runtimeName: mcp-gateway
+        routeName: agentregistry-delegate
+        pathPrefix: /registry
+        arctl:
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # Catalog the currency MCP server in agentregistry
+    - name: agentregistry-catalog
+      description: Register currency-server in agentregistry catalog
+      config:
+        serverName: currency-server
+        title: Currency Server
+        description: 'MCP server for currency conversion and exchange rate tools'
+        serviceName: currency-server
+        serviceNamespace: mcp-backend
+        servicePort: 8000
+        mcpPath: /mcp
+        runtimeName: mcp-gateway
+        pathSuffix: /currency-server
+        arctl:
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+  tests:
+    - name: currency-server-mcp-initialize
+      description: MCP client reaches currency-server via agentgateway, agentregistry, and mcp-backend
+      clusters:
+        - name: east
+      steps:
+        - action: send-request
+          hostname: '{{env.domains.app.main}}'
+          autoDetectGwAddress: true
+          gatewayNamespace: agentgateway-proxy
+          path: /registry/currency-server
+          method: POST
+          headers:
+            Content-Type: application/json
+            Accept: application/json, text/event-stream
+          body: '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agentic-demo","version":"1.0"}}}'
+          timeout: 30s
+          retries: 5
+          retryDelay: 6000
+        - action: verify
+          expect:
+            statusCode: 200

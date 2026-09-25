@@ -1,0 +1,25 @@
+# OTel Collector — Logs Agent (spoke/remote clusters)
+# Same receiver config as east otel-logs (OTLP).
+# Forwards all logs to east OTel gateway via single OTLP endpoint.
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  exporters:
+    otlp/east-gateway:
+      endpoint: '{{OTEL_GATEWAY_ENDPOINT}}'
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      logs:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlp/east-gateway]

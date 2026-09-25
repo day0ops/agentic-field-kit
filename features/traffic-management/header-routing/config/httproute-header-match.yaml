@@ -1,0 +1,21 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: header-routing
+  namespace: default
+spec:
+  parentRefs:
+    - name: waypoint
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - name: user
+              value: test
+      backendRefs:
+        - name: reviews-v2
+          port: 9080
+    - backendRefs:
+        - name: reviews-v1
+          port: 9080

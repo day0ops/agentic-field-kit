@@ -1,0 +1,82 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: canary-deployment
+  description: Canary deployment with weighted traffic splitting between service versions via waypoint
+spec:
+  category: traffic-management
+
+  requires:
+    applications:
+      - name: bookinfo
+        namespace: bookinfo
+
+  features:
+    - name: gateway
+      description: Create ingress gateway for Bookinfo
+      config:
+        gatewayName: bookinfo
+        namespace: bookinfo
+        gateway:
+          listeners:
+            - name: http
+              hostname: bookinfo.example.com
+              port: 80
+              protocol: HTTP
+              allowedRoutes:
+                namespaces:
+                  from: Same
+
+    - name: request-routing
+      description: Route traffic to productpage
+      config:
+        routeName: bookinfo
+        namespace: bookinfo
+        gatewayName: bookinfo
+        gatewayNamespace: bookinfo
+        hostname: bookinfo.example.com
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: productpage
+                port: 9080
+
+    - name: waypoint
+      description: Deploy waypoint proxy for reviews service
+      config:
+        waypointName: reviews-waypoint
+        namespace: bookinfo
+        labels:
+          target: service
+          serviceName: reviews
+
+    - name: traffic-shifting
+      description: Split traffic 90/10 between reviews v1 and v2
+      config:
+        routeName: reviews-canary
+        namespace: bookinfo
+        waypointName: reviews-waypoint
+        rules:
+          - backendRefs:
+              - name: reviews-v1
+                port: 9080
+                weight: 90
+              - name: reviews-v2
+                port: 9080
+                weight: 10
+
+  tests:
+    - name: bookinfo-accessible
+      description: Verify bookinfo is accessible with canary traffic splitting active
+      steps:
+        - action: send-request
+          hostname: bookinfo.example.com
+          autoDetectGwAddress: true
+          path: /productpage
+          timeout: 30s
+        - action: verify
+          expect:
+            statusCode: 200

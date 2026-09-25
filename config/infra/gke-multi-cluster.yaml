@@ -1,0 +1,19 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: gke-multi-cluster
+  description: GKE multi-cluster setup (management, east, west)
+
+spec:
+  provider: gke
+  region: us-west1
+  settings:
+    nodes:
+      desired: 2
+      type: n1-standard-2
+
+  clusters:
+    - name: east
+      role: workload
+    - name: west
+      role: workload

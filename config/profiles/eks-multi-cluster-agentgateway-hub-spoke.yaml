@@ -1,0 +1,337 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: eks-multi-cluster-agentgateway-hub-spoke
+  description: |
+    To provision an environment with enterprise agentgateway running in a hub-spoke configuration. Layered over multicluster ambient mesh (helm peering).
+    Global: cilium, cert-manager.
+    East: external-dns, keycloak, telemetry gateway, solo-ui (mgmt), enterprise agentgateway running as hub.
+    West: telemetry agent, solo-ui relay, enterprise agentgateway running as spoke.
+
+spec:
+  infra: eks-multi-cluster
+  environment: aws-dev
+
+  mesh:
+    istioVersion: 1.30.3
+    gatewayApiVersion: v1.5.0
+    profile: ambient
+    peering: helm
+
+    image:
+      istioRepo: us-docker.pkg.dev/soloio-img/istio
+      helmIstioRepo: us-docker.pkg.dev/soloio-img/istio-helm
+      tag: 1.30.3-solo
+
+    components:
+      - name: base
+        values:
+          defaultRevision: ''
+
+      - name: istiod
+        values:
+          env:
+            # disables trust domain validation when generating xDS config, set when different domains (false)
+            PILOT_SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+            # enables new IP autoallocation controller for ServiceEntry resources lacking user-supplied addresses (true)
+            PILOT_ENABLE_IP_AUTOALLOCATE: 'true'
+            # disables legacy remote-secrets-based multicluster entirely (true)
+            DISABLE_LEGACY_MULTICLUSTER: 'true'
+            # ----- optional -----
+            # gate for entire debug endpoint auth system. When false: all /debug/* endpoints open to any caller, no SPIFFE check, no namespace restriction. related to DEBUG_ENDPOINT_AUTH_ALLOWED_NAMESPACES (true)
+            ENABLE_DEBUG_ENDPOINT_AUTH: 'true'
+            # needs full access to istiod debug endpoints to function
+            DEBUG_ENDPOINT_AUTH_ALLOWED_NAMESPACES: 'gloo-mesh'
+            # allows Kubernetes Service selectors to match WorkloadEntry resources (not just pods) (true)
+            PILOT_ENABLE_K8S_SELECT_WORKLOAD_ENTRIES: 'true'
+          global:
+            multiCluster:
+              clusterName: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+            proxy:
+              clusterDomain: cluster.local
+          meshConfig:
+            accessLogFile: /dev/stdout
+            trustDomain: '{{cluster.name}}.local'
+            enableTracing: true
+            extensionProviders:
+              - name: ambient-tracing
+                opentelemetry:
+                  port: 4317
+                  service: '{{env.internal.telemetry.otelTracesCollector}}'
+            defaultConfig:
+              proxyMetadata:
+                # tells the sidecar/agent to intercept DNS queries
+                ISTIO_META_DNS_CAPTURE: 'true'
+          pilot:
+            cni:
+              namespace: istio-system
+              enabled: true
+          platforms:
+            # activates push-based multicluster peering system in istiod
+            peering:
+              enabled: true
+
+      - name: cni
+        values:
+          ambient:
+            dnsCapture: true
+          excludeNamespaces:
+            - istio-system
+            - kube-system
+
+      - name: ztunnel
+        values:
+          env:
+            # enables L7 observability feature (false)
+            L7_ENABLED: 'true'
+            # start DNS proxy
+            ISTIO_META_DNS_CAPTURE: 'true'
+            # disables trust domain validation when generating xDS config, set when different domains (false)
+            SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+            # disable in EKS environments
+            IPV6_ENABLED: false
+          l7Telemetry:
+            distributedTracing:
+              otlpEndpoint: 'http://{{env.internal.telemetry.otelTracesCollector}}:4317'
+          configValidation: true
+          istioNamespace: istio-system
+          namespace: istio-system
+          multiCluster:
+            clusterName: '{{cluster.name}}'
+          network: '{{cluster.name}}'
+          proxy:
+            clusterDomain: cluster.local
+          terminationGracePeriodSeconds: 29
+          variant: distroless
+
+      # east-west gateway deployed via Solo peering chart.
+      - name: peering-eastwest
+        values:
+          eastwest:
+            cluster: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+
+      # peering remote
+      - name: peering-remote
+        values:
+          trustDomain: '{{cluster.name}}.local'
+          addressType: Hostname
+          preferredDataplaneServiceType: LoadBalancer
+
+    certificates:
+      mode: self-signed
+
+  addons:
+    clusters:
+      - name: east
+        addons:
+          - name: external-dns
+            description: Automatic DNS record management via Route53
+            namespace: external-dns
+            version: 1.21.1
+            config:
+              provider: route53
+              domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+              region: '{{env.aws.region}}'
+              txtOwnerId: '{{env.dns.txtOwnerId}}'
+
+          - name: keycloak
+            description: Keycloak OIDC provider
+            phase: post
+            namespace: keycloak
+            keycloakImage: '{{env.keycloak.image}}'
+            postgresVersion: 18.2-alpine
+            config:
+              postgres:
+                persistentVolume:
+                  storageClass: gp3
+                  size: 5Gi
+              hostname: '{{env.domains.core.keycloak}}'
+              loginTheme: '{{env.keycloak.loginTheme}}'
+              tls:
+                enabled: true
+                createCertificate: true
+                clusterIssuerName: letsencrypt-dns
+                organization: solo.io
+              soloUiClients:
+                enabled: true
+                realm: solo-ui
+                hostname: 'https://{{env.domains.core.soloUi}}'
+                backendClientId: solo-ui-backend
+                backendClientSecret: solo-ui-backend-secret
+                frontendClientId: solo-ui-frontend
+              realms:
+                - realm: grafana
+                  groups:
+                    - grafana-admins
+                  clients:
+                    - clientId: grafana
+                      type: confidential
+                      clientSecret: grafana-client-secret
+                      flows:
+                        - authorization-code
+                      groupMembership: true
+                      redirectUris:
+                        - 'https://{{env.domains.core.grafana}}/login/generic_oauth'
+                      postLogoutRedirectUris:
+                        - 'https://{{env.domains.core.grafana}}'
+                  users:
+                    # username/password sourced from GRAFANA_REALM_ADMIN_USERNAME (default:
+                    # grafana-admin) and GRAFANA_REALM_ADMIN_PASSWORD, not this profile
+                    - email: grafana-admin@example.com
+                      firstName: Grafana
+                      lastName: Admin
+                      memberOf:
+                        - grafana-admins
+
+          - name: telemetry
+            phase: post
+            namespace: telemetry
+            chartVersions:
+              kube-prom-stack: 88.0.1
+              loki: 7.2.0
+              tempo: 1.61.3
+              alloy: 1.11.0
+              otel: 0.165.0
+            config:
+              database:
+                storageClass: gp3
+                storageSize: 100Gi
+              globalExport: true
+              soloUiNamespace: solo-enterprise
+              grafanaHostname: '{{env.domains.core.grafana}}'
+              grafanaTls:
+                enabled: true
+                secretName: grafana-tls
+                issuer: letsencrypt-dns
+              grafanaOidc:
+                enabled: true
+                issuerUrl: 'https://{{env.domains.core.keycloak}}/realms/grafana'
+                clientId: grafana
+                clientSecret: grafana-client-secret
+                adminGroup: grafana-admins
+
+          - name: solo-ui
+            description: Solo Enterprise UI
+            mode: management
+            version: '{{env.soloUi.version}}'
+            phase: post
+            namespace: solo-enterprise
+            config:
+              telemetryNamespace: telemetry
+              hostname: '{{env.domains.core.soloUi}}'
+              tls:
+                enabled: true
+                secretName: solo-ui-tls
+                issuer: letsencrypt-dns
+              oidc:
+                enabled: true
+                issuerUrl: 'https://{{env.domains.core.keycloak}}/realms/solo-ui'
+                backendClientId: solo-ui-backend
+                backendClientSecret: solo-ui-backend-secret
+                frontendClientId: solo-ui-frontend
+              clickhouse:
+                persistentVolume:
+                  storageClass: gp3
+                  size: 100Gi
+              products:
+                mesh:
+                  enabled: true
+                agentgateway:
+                  enabled: true
+                  namespace: agentgateway-system
+
+          - name: agentgateway
+            description: AI Gateway Enterprise hub
+            phase: post
+            namespace: agentgateway-system
+            version: '{{env.agentgateway.version}}'
+            config:
+              enterprise: true
+              ambientEnabled: true
+              soloUiNamespace: solo-enterprise
+              tracesCollectorName: opentelemetry-collector-traces
+              tracesCollectorNamespace: telemetry
+              tracingRandomSampling: true
+              gateway:
+                name: hub-agentgateway-proxy
+                namespace: agentgateway-proxy
+                hostname: '{{env.domains.app.main}}'
+                port: 80
+                protocol: HTTP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+      - name: west
+        addons:
+          - name: telemetry
+            phase: post
+            namespace: telemetry
+            chartVersions:
+              alloy: 1.11.0
+              otel: 0.165.0
+            config:
+              mode: agent
+              otelGatewayEndpoint: '{{env.internal.telemetry.otelGatewayEndpoint}}:4317'
+              lokiPushUrl: '{{env.internal.telemetry.lokiPushUrl}}'
+
+          - name: solo-ui
+            mode: relay
+            phase: post
+            version: '{{env.soloUi.version}}'
+            namespace: solo-enterprise
+            config:
+              tunnel:
+                fqdn: '{{env.internal.soloUi.tunnelFqdn}}'
+                port: 9000
+              telemetry:
+                fqdn: '{{env.internal.soloUi.telemetryFqdn}}'
+              # Relay chart's validation.yaml requires at least one products.*.enabled=true.
+              products:
+                mesh:
+                  enabled: true
+                agentgateway:
+                  enabled: true
+                  namespace: agentgateway-system
+
+          - name: agentgateway
+            description: AI Gateway Enterprise spoke
+            phase: post
+            namespace: agentgateway-system
+            version: '{{env.agentgateway.version}}'
+            config:
+              enterprise: true
+              ambientEnabled: true
+              globalGateway: true
+              soloUiNamespace: solo-enterprise
+              tracingRandomSampling: true
+              gateway:
+                name: spoke-agentgateway-proxy
+                namespace: agentgateway-proxy
+                port: 80
+                protocol: HTTP
+                serviceType: ClusterIP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+    global:
+      - name: cilium
+        description: eBPF-based CNI in chaining mode for network policy and observability
+        version: 1.19.4
+        config:
+          mode: chaining
+          chainingTarget: aws-cni
+          enableHealthProbePolicy: true
+
+      - name: cert-manager
+        description: Certificate management for TLS
+        version: 1.20.2
+        namespace: cert-manager
+        config:
+          letsencrypt:
+            enabled: true
+            email: '{{env.acme.email}}'
+            region: '{{env.aws.region}}'

@@ -1,0 +1,62 @@
+# Helm values for Grafana Tempo Distributed
+# https://github.com/grafana/helm-charts/tree/main/charts/tempo-distributed
+
+# Disable minio — use local storage for demo simplicity
+minio:
+  enabled: false
+
+# Enable OTLP receivers for traces
+traces:
+  otlp:
+    grpc:
+      enabled: true
+    http:
+      enabled: true
+  zipkin:
+    enabled: false
+  jaeger:
+    thriftHttp:
+      enabled: false
+  opencensus:
+    enabled: false
+
+# Minimal replica config for demo environments (single-node/small clusters)
+ingester:
+  replicas: 1
+  persistence:
+    enabled: true
+  config:
+    replication_factor: 1
+  affinity: {}
+
+distributor:
+  replicas: 1
+  affinity: {}
+
+querier:
+  replicas: 1
+  affinity: {}
+
+queryFrontend:
+  replicas: 1
+  affinity: {}
+
+compactor:
+  replicas: 1
+  persistence:
+    enabled: true
+  affinity: {}
+
+# Metrics generator enables TraceQL metrics queries (rate(), etc.)
+metricsGenerator:
+  enabled: true
+  replicas: 1
+  affinity: {}
+  config:
+    storage:
+      path: /var/tempo/wal
+      remote_write: []
+
+storage:
+  trace:
+    backend: local

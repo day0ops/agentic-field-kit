@@ -1,0 +1,54 @@
+# OTel Collector — Gateway (east/full mode only)
+# Central fan-out: receives ALL signals from west cluster's OTel collectors via OTLP.
+# Exports:
+#   metrics → Prometheus remote-write (local)
+#   logs    → Loki OTLP (local)
+#   traces  → Tempo (local) + Solo UI telemetry collector (local) + AgentRegistry telemetry collector (local)
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  exporters:
+    prometheusremotewrite/prometheus:
+      endpoint: 'http://kube-prometheus-stack-prometheus.{{TELEMETRY_NAMESPACE}}.svc.cluster.local:9090/api/v1/write'
+      resource_to_telemetry_conversion:
+        enabled: true
+      tls:
+        insecure: true
+    otlphttp/loki:
+      endpoint: 'http://loki.{{TELEMETRY_NAMESPACE}}.svc.cluster.local:3100/otlp'
+      tls:
+        insecure: true
+    otlp/tempo:
+      endpoint: 'tempo-distributor.{{TELEMETRY_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+    otlp/solo-ui:
+      endpoint: 'solo-enterprise-telemetry-collector.{{SOLO_UI_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+    otlp/agentregistry:
+      endpoint: 'agentregistry-enterprise-telemetry-collector.{{AGENTREGISTRY_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      metrics:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [prometheusremotewrite/prometheus]
+      logs:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlphttp/loki]
+      traces:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlp/tempo, otlp/solo-ui, otlp/agentregistry]

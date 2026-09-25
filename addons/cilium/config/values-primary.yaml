@@ -1,0 +1,4 @@
+# Cilium primary CNI mode overlay
+# Replaces kube-proxy and takes over as the cluster's primary CNI.
+
+kubeProxyReplacement: true

@@ -1,0 +1,289 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: sre-incident-response
+  description: |
+    Validates cross-domain MCP gateway identity federation using real Enterprise Agentgateway: an on-call agent investigates via two Keycloak-federated-with-Entra MCP servers (silent token exchange), plus a third, Entra-native-only MCP server (direct Entra On-Behalf-Of exchange, rollback_deployment).
+
+    Source code: github.com/day0ops/sre-incident-response-system
+
+    Prerequisites (not automated by this usecase - see the design doc's Amendment):
+    create the Entra app registrations for chat-app/agent-gateway/repo-mcp manually (see docs/entra-tenant-setup.md), 
+    then fill in config/environments/aws-dev.yaml's spec.entra.sreIRS.* placeholders and set the ENTRA_GATEWAY_CLIENT_SECRET / ENTRA_CHAT_CLIENT_SECRET env vars before deploying.
+
+spec:
+  # diagram: |
+  #   flowchart LR
+  #     SRE([SRE]) -->|Entra login| ChatApp[sre-irs-chat-app\nsre-incident-response]
+  #     ChatApp --> Agent[sre-irs-agent\nsre-incident-response]
+  #     Agent -->|Bearer Entra JWT| GW[hub-agentgateway-proxy\nagentgateway-proxy]
+  #     GW -->|token exchange| KC[Keycloak\nfederated with Entra]
+  #     KC --> IncidentMCP[incident-mcp\nget_unhealthy_pods]
+  #     KC --> RunbookMCP[runbook-mcp\nget_deployment_history]
+  #     GW -->|On-Behalf-Of exchange| Entra[(Azure Entra ID)]
+  #     Entra --> RepoMCP[repo-mcp\nrollback_deployment]
+
+  infra: eks-multi-cluster
+  category: multi-cluster
+
+  requires:
+    applications:
+      - name: sre-incident-response-system
+        namespace: sre-incident-response
+        clusters:
+          - name: east
+
+  features:
+    # chat-app's Entra client secret. Created first so it's available via
+    # secretKeyRef by the time chat-app's Deployment (requires.applications above)
+    # starts.
+    - name: env-secret
+      description: chat-app's Entra client secret (sre-irs-entra-secrets/chat-app-client-secret)
+      config:
+        secretName: sre-irs-entra-secrets
+        namespace: sre-incident-response
+        key: chat-app-client-secret
+        envVar: ENTRA_CHAT_CLIENT_SECRET
+      clusters:
+        - name: east
+
+    # Registers the OpenAI LLM backend on agentgateway, so agent code never
+    # holds a provider API key directly. Requires OPENAI_API_KEY at deploy time.
+    - name: providers
+      description: 'AgentGateway: register OpenAI LLM backend at /sre-irs/llm (path rewrite to /)'
+      config:
+        enterprise: true
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        providers:
+          - name: sre-irs-llm
+            providerName: openai
+            pathPrefix: /sre-irs/llm
+            pathRewrite: /
+            model: gpt-4o
+      clusters:
+        - name: east
+
+    # Static EnterpriseAgentgatewayBackend per MCP server (no AgentRegistry -
+    # see design doc).
+    - name: agentgateway-backend
+      description: Backend targeting incident-mcp
+      config:
+        backendName: incident-mcp-backend
+        namespace: agentgateway-proxy
+        enterprise: true
+        mcp:
+          targets:
+            - name: incident-mcp
+              static:
+                host: incident-mcp.sre-incident-response.svc.cluster.local
+                port: 9101
+                protocol: StreamableHTTP
+          sessionRouting: Stateless
+      clusters:
+        - name: east
+
+    - name: agentgateway-backend
+      description: Backend targeting runbook-mcp
+      config:
+        backendName: runbook-mcp-backend
+        namespace: agentgateway-proxy
+        enterprise: true
+        mcp:
+          targets:
+            - name: runbook-mcp
+              static:
+                host: runbook-mcp.sre-incident-response.svc.cluster.local
+                port: 9102
+                protocol: StreamableHTTP
+          sessionRouting: Stateless
+      clusters:
+        - name: east
+
+    # repo-mcp backend (Entra-native, reached via the direct OBO exchange in
+    # entra-obo-policy below).
+    - name: agentgateway-backend
+      description: Backend targeting repo-mcp
+      config:
+        backendName: repo-mcp-backend
+        namespace: agentgateway-proxy
+        enterprise: true
+        mcp:
+          targets:
+            - name: repo-mcp
+              static:
+                host: repo-mcp.sre-incident-response.svc.cluster.local
+                port: 9103
+                protocol: StreamableHTTP
+          sessionRouting: Stateless
+      clusters:
+        - name: east
+
+    # Routes hub gateway traffic to incident-mcp/runbook-mcp, rewriting each
+    # path prefix down to /mcp. repo-mcp gets its own route below since
+    # sre-irs-jwt-auth (applied to this route) strips the Authorization header
+    # its OBO exchange needs intact.
+    - name: ingress-httproute
+      description: Hub gateway routes sre-irs MCP traffic to incident-mcp/runbook-mcp
+      config:
+        routeName: sre-irs-mcp-route
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        namespace: agentgateway-proxy
+        hostname: '{{env.domains.app.main}}'
+        rules:
+          - matches:
+              - path: { type: PathPrefix, value: /sre-irs/incident-mcp }
+            filters:
+              - type: URLRewrite
+                urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: /mcp } }
+            backendRefs:
+              - name: incident-mcp-backend
+                backendKind: AgentgatewayBackend
+          - matches:
+              - path: { type: PathPrefix, value: /sre-irs/runbook-mcp }
+            filters:
+              - type: URLRewrite
+                urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: /mcp } }
+            backendRefs:
+              - name: runbook-mcp-backend
+                backendKind: AgentgatewayBackend
+      clusters:
+        - name: east
+
+    # repo-mcp's dedicated HTTPRoute, not covered by sre-irs-jwt-auth (see note
+    # above).
+    - name: ingress-httproute
+      description: Hub gateway routes sre-irs repo-mcp traffic (own route, no shared JWT-auth policy)
+      config:
+        routeName: sre-irs-repo-mcp-route
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        namespace: agentgateway-proxy
+        hostname: '{{env.domains.app.main}}'
+        rules:
+          - matches:
+              - path: { type: PathPrefix, value: /sre-irs/repo-mcp }
+            filters:
+              - type: URLRewrite
+                urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: /mcp } }
+            backendRefs:
+              - name: repo-mcp-backend
+                backendKind: AgentgatewayBackend
+      clusters:
+        - name: east
+
+    # Public gateway for chat-app. No OIDC gating here - the app handles its
+    # own Entra login flow.
+    - name: oidc-gateway
+      description: Public gateway for sre-irs-chat-app (no login gate - the app authenticates itself)
+      config:
+        namespace: sre-incident-response
+        hostname: '{{env.domains.app.sreIRS}}'
+        gatewayName: sre-irs-chat-app-https
+        routeName: sre-irs-chat-app
+        sourceRanges:
+          - '{{env.security.vpnSourceRanges}}'
+        backend:
+          name: sre-irs-chat-app
+          port: 80
+      clusters:
+        - name: east
+
+    # JWT auth (Entra, external JWKS) + Keycloak token exchange for the two
+    # Keycloak-federated MCP servers.
+    - name: token-exchange-policy
+      description: JWT auth against Entra + Keycloak exchange for incident-mcp/runbook-mcp
+      config:
+        policyName: sre-irs-jwt-auth
+        namespace: agentgateway-proxy
+        targetHTTPRoute: sre-irs-mcp-route
+        staticBackendNames:
+          - incident-mcp-backend
+          - runbook-mcp-backend
+        jwtIssuer: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/v2.0'
+        jwtAudiences:
+          - '{{env.entra.sreIRS.agentGatewayClientId}}'
+        jwksRemoteUrl: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/discovery/v2.0/keys'
+        # Keycloak's own issuer, used for the exchange leg only (distinct from
+        # jwtIssuer above, which is Entra's).
+        keycloakIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/sre-irs'
+        keycloak:
+          namespace: keycloak
+        jwksPath: /realms/sre-irs/protocol/openid-connect/certs
+        exchangePath: /realms/sre-irs/protocol/openid-connect/token
+        clientId: gateway-exchange
+        # Keycloak-internal wiring secret, matches the value set on this client
+        # in the sre-irs realm config. Not an external credential, so a
+        # committed literal is fine here.
+        clientSecret: gateway-exchange-secret
+        # JwtBearer (RFC 7523) is required here - Keycloak's Standard Token
+        # Exchange rejects externally-issued (Entra) subject tokens. Requires
+        # the caller's Entra identity to already have a federated-identity
+        # link to a Keycloak user (see the design doc).
+        grantType: JwtBearer
+      clusters:
+        - name: east
+
+    # Direct, silent Entra On-Behalf-Of exchange for repo-mcp, the
+    # Entra-native-only MCP server. No interactive consent, no stored
+    # credential - a live OBO call on every request (see
+    # features/agentic/entra-obo-policy).
+    - name: entra-obo-policy
+      description: Direct Entra OBO exchange for repo-mcp (no interactive elicitation)
+      config:
+        policyName: sre-irs-repo-mcp-entra-obo
+        namespace: agentgateway-proxy
+        staticBackendName: repo-mcp-backend
+        tenantId: '{{env.entra.sreIRS.tenantId}}'
+        clientId: '{{env.entra.sreIRS.agentGatewayClientId}}'
+        # Real external Entra credential, read from a required env var, never
+        # a committed literal.
+        clientSecretEnvVar: ENTRA_GATEWAY_CLIENT_SECRET
+        scope: 'api://{{env.entra.sreIRS.repoMcpClientId}}/.default'
+      clusters:
+        - name: east
+
+    # Gateway-level gate on get_deployment_history: only callers whose Entra
+    # `roles` claim includes deployment.history.read may call it. Checked
+    # against the caller's own JWT (jwt.roles), since that's the token this
+    # gateway policy's CEL context actually has bound.
+    - name: mcp-tool-policy
+      description: Gate get_deployment_history on the deployment.history.read Entra app role
+      config:
+        policyName: sre-irs-runbook-mcp-scope-gate
+        namespace: agentgateway-proxy
+        staticBackendName: runbook-mcp-backend
+        action: Require
+        matchExpressions:
+          - "mcp.tool.name != 'get_deployment_history' || 'deployment.history.read' in jwt.roles"
+      clusters:
+        - name: east
+
+    # Not yet implemented: gate rollback_deployment on the deployment.rollback
+    # Entra role, same pattern as above.
+    # - name: mcp-tool-policy
+    #   description: Gate rollback_deployment on the deployment.rollback role
+    #   config:
+    #     policyName: sre-irs-repo-mcp-rollback-gate
+    #     namespace: agentgateway-proxy
+    #     staticBackendName: repo-mcp-backend
+    #     action: Deny
+    #     matchExpressions:
+    #       - "mcp.tool.name == 'rollback_deployment' && !('deployment.rollback' in jwt.roles)"
+    #   clusters:
+    #     - name: east
+
+  tests:
+    # Verifies sre-irs-chat-app's public hostname resolves in DNS and responds,
+    # the way an end user's browser would reach it. Waits indefinitely for
+    # DNS/HTTP since child-zone propagation can lag well past a fixed retry
+    # budget (this listener is HTTPS-only, via features/security/oidc-gateway).
+    - name: sre-irs-chat-app-reachable
+      description: sre-irs-chat-app's public hostname resolves in DNS and responds
+      steps:
+        - action: check-public-endpoint
+          hostname: '{{env.domains.app.sreIRS}}'
+          protocol: https
+          path: /

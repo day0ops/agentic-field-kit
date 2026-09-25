@@ -1,0 +1,79 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: egress-control
+  description: Control outbound traffic through an egress waypoint with authorization policies
+spec:
+  category: security
+  requires:
+    applications:
+      - name: httpbin
+        namespace: httpbin
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+
+  features:
+    - name: egress-waypoint
+      description: Deploy egress waypoint in dedicated namespace
+      config:
+        waypointName: egress-waypoint
+        namespace: egress
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: service-entry
+      description: Register external service in the mesh
+      config:
+        entryName: httpbin-org
+        namespace: egress
+        hosts:
+          - httpbin.org
+        location: MESH_EXTERNAL
+        resolution: DNS
+        ports:
+          - number: 80
+            name: http
+            protocol: HTTP
+          - number: 443
+            name: https
+            protocol: TLS
+        waypointName: egress-waypoint
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: egress-authorization
+      description: Allow httpbin namespace to access httpbin.org
+      config:
+        policyName: allow-httpbin-egress
+        namespace: egress
+        waypointName: egress-waypoint
+        action: ALLOW
+        rules:
+          - from:
+              - source:
+                  namespaces:
+                    - httpbin
+            to:
+              - operation:
+                  hosts:
+                    - httpbin.org
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: egress-allowed
+      description: Verify egress traffic to httpbin.org is allowed through the egress waypoint
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: exec
+          command: kubectl exec deploy/httpbin -n httpbin -- curl -s -o /dev/null -w '%{http_code}' http://httpbin.org/get
+          timeout: 30s
+        - action: verify
+          expect:
+            contains: '200'

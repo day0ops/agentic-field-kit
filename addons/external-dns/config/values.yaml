@@ -1,0 +1,9 @@
+# Default values - typically overridden via Helm --set flags
+# See ExternalDnsFeature.deploy() for runtime configuration
+
+provider: aws
+policy: sync
+sources:
+  - service
+  - ingress
+  - gateway-httproute

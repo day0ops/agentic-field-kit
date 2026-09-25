@@ -1,0 +1,21 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: eks-single-cluster-ipv6
+  description: EKS single IPv6 cluster
+
+spec:
+  name: birch
+  provider: eks-ipv6
+  environment: aws-dev
+
+  settings:
+    enable_bastion: true
+    enable_dns64: true
+    nodes:
+      desired: 2
+      type: t3.medium
+
+  clusters:
+    - name: demo
+      role: management

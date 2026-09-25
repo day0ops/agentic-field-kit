@@ -1,0 +1,12 @@
+node_modules
+cloud-provisioner
+._output
+_output
+._archive
+.superpowers
+images
+docs/architecture
+docs/superpowers
+
+# Template with a raw multi-line placeholder, not parseable as standalone YAML
+addons/keycloak/config/certificate.yaml

@@ -1,0 +1,11 @@
+apiVersion: admin.solo.io/v1alpha1
+kind: Segment
+metadata:
+  name: segment
+  namespace: gloo-mesh
+spec:
+  clusterSelector:
+    matchLabels: {}
+  config:
+    dns:
+      domain: segment.global

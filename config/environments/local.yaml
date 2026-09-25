@@ -1,0 +1,26 @@
+apiVersion: agentic.demo/v1
+kind: Environment
+metadata:
+  name: local
+  description: Local Kubernetes cluster (lok8s)
+
+spec:
+  # No infraProfile or dns - purely local cluster
+  tls:
+    issuer: selfsigned-issuer
+
+  # Okta tenant
+  okta:
+    domain: dev-12345.okta.com
+
+  keycloak:
+    scheme: http
+
+  # Domain mappings - auto-generated pattern: <service>.<childZone>.<parentDomain>
+  domains:
+    core:
+      keycloak: keycloak.keycloak.svc.cluster.local
+      grafana: kube-prometheus-stack-grafana.telemetry.svc.cluster.local
+      soloUi: solo-enterprise-ui.solo-enterprise.svc.cluster.local
+    app:
+      main: app.bookinfo.svc.cluster.local

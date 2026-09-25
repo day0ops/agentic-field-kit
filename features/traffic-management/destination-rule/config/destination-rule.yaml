@@ -1,0 +1,10 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: destination-rule
+  namespace: default
+spec:
+  host: external.example.com
+  trafficPolicy:
+    tls:
+      mode: SIMPLE

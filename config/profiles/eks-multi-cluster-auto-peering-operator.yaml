@@ -1,0 +1,126 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: eks-multi-cluster-peering-operator
+  description: |
+    Multicluster ambient mesh with helm-based peering
+    Using Solo operator to install
+    Use agentgateway as ingress controller
+    Cilium addon enabled
+
+spec:
+  infra: eks-multi-cluster
+  environment: aws-dev
+
+  mesh:
+    istioVersion: 1.30.3
+    gatewayApiVersion: v1.5.0
+    installMethod: operator
+    peering: helm
+
+    certificates:
+      mode: self-signed
+
+    operator:
+      version: 0.5.2
+      namespace: gloo-mesh
+
+    ztunnelEnv:
+      - name: IPV6_ENABLED
+        value: 'false'
+
+    serviceMeshController:
+      cluster: '{{cluster.name}}'
+      network: '{{cluster.name}}'
+      trustDomain: '{{cluster.name}}.local'
+      dataplaneMode: Ambient
+      installNamespace: istio-system
+      scalingProfile: Demo
+
+    components:
+      - name: peering-eastwest
+        values:
+          eastwest:
+            cluster: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+
+      # peering remote
+      - name: peering-remote
+        values:
+          trustDomain: '{{cluster.name}}.local'
+          addressType: Hostname
+          preferredDataplaneServiceType: LoadBalancer
+
+  addons:
+    clusters:
+      - name: east
+        addons:
+          - name: external-dns
+            description: Automatic DNS record management via Route53
+            namespace: external-dns
+            config:
+              provider: route53
+              domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+              region: '{{env.aws.region}}'
+              txtOwnerId: '{{env.dns.txtOwnerId}}'
+
+          - name: telemetry
+            phase: post
+            namespace: telemetry
+
+          - name: solo-ui
+            mode: management
+            version: '{{env.soloUi.version}}'
+            phase: post
+            namespace: solo-enterprise
+            serviceType: LoadBalancer
+            telemetryNamespace: telemetry
+
+          - name: agentgateway
+            description: AI Gateway ingress controller
+            namespace: agentgateway-system
+            config:
+              ambientEnabled: true
+              gateway:
+                name: bookinfo-gateway
+                namespace: agentgateway-proxy
+                hostname: '{{env.domains.app.main}}'
+                port: 80
+                protocol: HTTP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+      - name: west
+        addons:
+          - name: solo-ui
+            mode: relay
+            phase: post
+            version: '{{env.soloUi.version}}'
+            namespace: solo-enterprise
+            tunnel:
+              fqdn: solo-enterprise-ui.solo-enterprise.mesh.internal
+              port: 9000
+            telemetry:
+              fqdn: solo-enterprise-telemetry-gateway.solo-enterprise.mesh.internal
+            # Relay chart's validation.yaml requires at least one products.*.enabled=true.
+            products:
+              mesh:
+                enabled: true
+
+    global:
+      - name: cilium
+        description: eBPF-based CNI in chaining mode for network policy and observability
+        version: 1.19.4
+        mode: chaining
+        enableHealthProbePolicy: true
+
+      - name: cert-manager
+        description: Certificate management for TLS
+        version: 1.20.2
+        namespace: cert-manager
+        config:
+          letsencrypt:
+            enabled: true
+            email: '{{env.acme.email}}'
+            region: '{{env.aws.region}}'

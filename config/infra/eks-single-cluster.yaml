@@ -1,0 +1,20 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: eks-single-cluster
+  description: EKS single cluster
+
+spec:
+  name: cedar
+  provider: eks
+  environment: aws-dev
+
+  settings:
+    nodes:
+      desired: 2
+      type: t3.medium
+      private: true
+
+  clusters:
+    - name: demo
+      role: management

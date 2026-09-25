@@ -1,0 +1,43 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: hybrid-multi-cloud
+  description: Hybrid multi-cloud setup with EKS, GKE and AKS workload clusters
+
+spec:
+  name: ridge
+  provider: multicluster
+
+  settings:
+    nodes:
+      desired: 2
+
+  clusters:
+    - name: mgmt
+      cloud: eks
+      region: us-west-2
+      role: management
+      # Per-cluster settings.nodes replaces the top-level one wholesale (shallow
+      # merge in infra-manager.js), so desired must be repeated alongside type.
+      settings:
+        nodes:
+          desired: 2
+          type: t3.medium
+
+    - name: gke-workload
+      cloud: gke
+      region: us-central1
+      role: workload
+      settings:
+        nodes:
+          desired: 2
+          type: n1-standard-2
+
+    - name: aks-workload
+      cloud: aks
+      region: Australia East
+      role: workload
+      settings:
+        nodes:
+          desired: 2
+          type: Standard_D2_v2

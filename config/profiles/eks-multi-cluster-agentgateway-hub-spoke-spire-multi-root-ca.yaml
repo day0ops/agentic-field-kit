@@ -1,0 +1,278 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: eks-multi-cluster-agentgateway-hub-spoke-spire-multi-root-ca
+  description: |
+    Minimal profile for testing SPIRE multi root CA: an independent root bidirectionally federated with istiod's cacerts root instead of sharing one.
+    East: external-dns, keycloak (finflow realm only), agentgateway hub.
+    West: agentgateway spoke.
+
+spec:
+  infra: eks-multi-cluster
+  environment: aws-dev
+
+  mesh:
+    istioVersion: 1.30.3
+    gatewayApiVersion: v1.5.0
+    profile: ambient
+    peering: helm
+
+    image:
+      istioRepo: us-docker.pkg.dev/soloio-img/istio
+      helmIstioRepo: us-docker.pkg.dev/soloio-img/istio-helm
+      tag: 1.30.3-solo
+
+    components:
+      - name: base
+        values:
+          defaultRevision: ''
+
+      - name: istiod
+        values:
+          env:
+            # disables trust domain validation when generating xDS config, set when different domains (false)
+            PILOT_SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+            # enables new IP autoallocation controller for ServiceEntry resources lacking user-supplied addresses (true)
+            PILOT_ENABLE_IP_AUTOALLOCATE: 'true'
+            # disables legacy remote-secrets-based multicluster entirely (true)
+            DISABLE_LEGACY_MULTICLUSTER: 'true'
+            # ----- optional -----
+            # gate for entire debug endpoint auth system. When false: all /debug/* endpoints open to any caller, no SPIFFE check, no namespace restriction. related to DEBUG_ENDPOINT_AUTH_ALLOWED_NAMESPACES (true)
+            ENABLE_DEBUG_ENDPOINT_AUTH: 'true'
+            # needs full access to istiod debug endpoints to function
+            DEBUG_ENDPOINT_AUTH_ALLOWED_NAMESPACES: 'gloo-mesh'
+            # allows Kubernetes Service selectors to match WorkloadEntry resources (not just pods) (true)
+            PILOT_ENABLE_K8S_SELECT_WORKLOAD_ENTRIES: 'true'
+          global:
+            multiCluster:
+              clusterName: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+            proxy:
+              clusterDomain: cluster.local
+          gateways:
+            spire:
+              workloads: true
+          meshConfig:
+            accessLogFile: /dev/stdout
+            trustDomain: '{{cluster.name}}.local'
+            enableTracing: true
+            extensionProviders:
+              - name: ambient-tracing
+                opentelemetry:
+                  port: 4317
+                  service: '{{env.internal.telemetry.otelTracesCollector}}'
+            defaultConfig:
+              proxyMetadata:
+                # tells the sidecar/agent to intercept DNS queries
+                ISTIO_META_DNS_CAPTURE: 'true'
+          pilot:
+            cni:
+              namespace: istio-system
+              enabled: true
+          platforms:
+            # activates push-based multicluster peering system in istiod
+            peering:
+              enabled: true
+
+      - name: cni
+        values:
+          ambient:
+            dnsCapture: true
+          excludeNamespaces:
+            - istio-system
+            - kube-system
+
+      - name: ztunnel
+        values:
+          env:
+            # enables L7 observability feature (false)
+            L7_ENABLED: 'true'
+            # start DNS proxy
+            ISTIO_META_DNS_CAPTURE: 'true'
+            # disables trust domain validation when generating xDS config, set when different domains (false)
+            SKIP_VALIDATE_TRUST_DOMAIN: 'true'
+            # disable in EKS environments
+            IPV6_ENABLED: false
+          spire:
+            enabled: true
+          l7Telemetry:
+            distributedTracing:
+              otlpEndpoint: 'http://{{env.internal.telemetry.otelTracesCollector}}:4317'
+          configValidation: true
+          istioNamespace: istio-system
+          namespace: istio-system
+          multiCluster:
+            clusterName: '{{cluster.name}}'
+          network: '{{cluster.name}}'
+          proxy:
+            clusterDomain: cluster.local
+          terminationGracePeriodSeconds: 29
+          variant: distroless
+
+      # SPIRE_ENABLED=false is intentional: Solo's SPIRE docs never register the
+      # east-west gateway with SPIRE, and ztunnel's gateway-mode SPIRE client
+      # (dedicated_ca_client.rs) has a confirmed DER/PEM parsing bug. Cross-cluster
+      # mTLS works because the spire addon bidirectionally federates its independent
+      # root with istiod's cacerts root (multiRoot: true, see addons/spire/index.js).
+      - name: peering-eastwest
+        values:
+          eastwest:
+            cluster: '{{cluster.name}}'
+            network: '{{cluster.name}}'
+            deployment:
+              spec:
+                template:
+                  spec:
+                    containers:
+                      - name: istio-proxy
+                        env:
+                          - name: SPIRE_ENABLED
+                            value: 'false'
+
+      # peering remote
+      - name: peering-remote
+        values:
+          trustDomain: '{{cluster.name}}.local'
+          addressType: Hostname
+          preferredDataplaneServiceType: LoadBalancer
+
+    certificates:
+      mode: self-signed
+
+  addons:
+    clusters:
+      - name: east
+        addons:
+          - name: external-dns
+            description: Automatic DNS record management via Route53
+            namespace: external-dns
+            version: 1.21.1
+            config:
+              provider: route53
+              domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+              region: '{{env.aws.region}}'
+              txtOwnerId: '{{env.dns.txtOwnerId}}'
+
+          - name: keycloak
+            description: Keycloak OIDC provider
+            phase: post
+            namespace: keycloak
+            keycloakImage: '{{env.keycloak.image}}'
+            postgresVersion: 18.2-alpine
+            config:
+              postgres:
+                persistentVolume:
+                  storageClass: gp3
+                  size: 5Gi
+              hostname: '{{env.domains.core.keycloak}}'
+              loginTheme: '{{env.keycloak.loginTheme}}'
+              tls:
+                enabled: true
+                createCertificate: true
+                clusterIssuerName: letsencrypt-dns
+                organization: solo.io
+              realms:
+                - realm: finflow
+                  customAttributes:
+                    - role
+                  clients:
+                    - clientId: finflow-bff
+                      type: confidential
+                      clientSecret: finflow-bff-secret
+                      flows:
+                        - authorization-code
+                      redirectUris:
+                        - 'https://{{env.domains.app.main}}/*'
+                      postLogoutRedirectUris:
+                        - 'https://{{env.domains.app.main}}'
+                  users:
+                    - username: morgan
+                      firstName: Morgan
+                      lastName: Chen
+                      email: morgan@finflow.demo
+                      attributes:
+                        role: trader
+                    - username: alex
+                      firstName: Alex
+                      lastName: Rivera
+                      email: alex@finflow.demo
+                      attributes:
+                        role: analyst
+                  defaultPassword: Admin1234
+
+          - name: agentgateway
+            description: AI Gateway Enterprise hub
+            phase: post
+            namespace: agentgateway-system
+            version: '{{env.agentgateway.version}}'
+            config:
+              enterprise: true
+              ambientEnabled: true
+              soloUiNamespace: solo-enterprise
+              tracesCollectorName: opentelemetry-collector-traces
+              tracesCollectorNamespace: telemetry
+              tracingRandomSampling: true
+              gateway:
+                name: hub-agentgateway-proxy
+                namespace: agentgateway-proxy
+                hostname: '{{env.domains.app.main}}'
+                port: 80
+                protocol: HTTP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+      - name: west
+        addons:
+          - name: agentgateway
+            description: AI Gateway Enterprise spoke
+            phase: post
+            namespace: agentgateway-system
+            version: '{{env.agentgateway.version}}'
+            config:
+              enterprise: true
+              ambientEnabled: true
+              globalGateway: true
+              soloUiNamespace: solo-enterprise
+              tracingRandomSampling: true
+              gateway:
+                name: spoke-agentgateway-proxy
+                namespace: agentgateway-proxy
+                port: 80
+                protocol: HTTP
+                serviceType: ClusterIP
+                allowedRoutes:
+                  namespaces:
+                    from: All
+
+    global:
+      # cilium (the CNI) must install before spire — spire's DaemonSets/StatefulSet
+      # can't schedule pods without working pod networking, and pre-phase addons
+      # install in this list's order with no dependency-aware reordering.
+      - name: cilium
+        description: eBPF-based CNI in chaining mode for network policy and observability
+        version: 1.19.4
+        config:
+          mode: chaining
+          chainingTarget: aws-cni
+          enableHealthProbePolicy: true
+
+      - name: cert-manager
+        description: Certificate management for TLS
+        version: 1.20.2
+        namespace: cert-manager
+        config:
+          letsencrypt:
+            enabled: true
+            email: '{{env.acme.email}}'
+            region: '{{env.aws.region}}'
+
+      - name: spire
+        description: SPIRE workload identity for ztunnel and ambient workloads
+        phase: pre
+        config:
+          certMode: self-signed
+          trustDomain: '{{cluster.name}}.local'
+          # Independent root, bidirectionally federated with istiod's cacerts root
+          # instead of reusing it (see addons/spire/index.js).
+          multiRoot: true

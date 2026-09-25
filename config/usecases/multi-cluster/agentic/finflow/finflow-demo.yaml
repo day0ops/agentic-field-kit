@@ -1,0 +1,397 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: finflow-mcp-registration
+  description: |
+    FinFlow server registration in agentregistry.
+    - 4 FinFlow MCP servers deployed in the finflow namespace on the east cluster
+    - Dedicated Virtual Runtime (finflow-mcp-gateway) wired to hub agentgateway
+    - All 4 MCP servers cataloged in agentregistry.
+    - Agents on Amazon Bedrock AgentCore discover and call MCP tools via agentregistry
+
+spec:
+  diagram: |
+    flowchart LR
+      Agent([AgentCore Agents]) -->|discover /finflow/*| AR[AgentRegistry\nagentregistry-system · east]
+      AR -->|delegate HTTPRoute| GW[hub-agentgateway-proxy\nagentgateway-proxy · east]
+      GW -->|route| NS[finflow namespace · east]
+      NS --> MDP[market-data-mcp\nport 8000]
+      NS --> PRT[portfolio-mcp\nport 8000]
+      NS --> NWS[news-mcp\nport 8000]
+      NS --> BRK[brokerage-mcp\nport 8000]
+
+  infra: eks-multi-cluster
+  category: multi-cluster
+
+  requires:
+    applications:
+      - name: finflow
+        namespace: finflow
+        clusters:
+          - name: east
+
+  features:
+    # ── Step 0: Register OpenAI LLM backend on hub agentgateway ───────────────
+
+    - name: providers
+      description: 'AgentGateway: register OpenAI LLM backend at /openai (path rewrite to /)'
+      config:
+        enterprise: true
+        namespace: agentgateway-proxy
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        providers:
+          - name: openai
+            pathPrefix: /openai
+            pathRewrite: /
+            model: gpt-4o
+          - name: anthropic
+            pathPrefix: /anthropic
+            pathRewrite: /
+            model: claude-opus-4-6
+      clusters:
+        - name: east
+
+    # ── Step 1: Wire agentregistry into hub gateway + create Virtual Runtime ──
+
+    - name: agentregistry-route
+      description: 'AgentRegistry: create finflow-mcp-gateway Virtual Runtime on hub agentgateway'
+      config:
+        gatewayName: hub-agentgateway-proxy
+        gatewayNamespace: agentgateway-proxy
+        agentregistryNamespace: agentregistry-system
+        runtimeName: finflow-mcp-gateway
+        routeName: finflow-agentregistry-delegate
+        pathPrefix: /finflow
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 1b: Create managed AgentCore Gateway inside VPC ──────────────────
+
+    - name: agentcore-gateway
+      description: 'AgentCore: provision managed EC2 gateway in east VPC for private AgentCore routing'
+      notes: 'AWS prerequisite — outbound identity federation must be enabled in account 941622571599 before the gateway can reconcile. See https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_outbound_getting_started.html'
+      config:
+        gatewayName: finflow-agentcore-gateway
+        runtimeName: aws-agentcore
+        networkId: '{{infra.clusters.east.network.vpcId}}'
+        subnetId: '{{infra.clusters.east.network.privateSubnetIds[0]}}'
+        securityGroupIds:
+          - '{{infra.clusters.east.network.workerSgId}}'
+        sts:
+          allowedSubjectClaims:
+            - Groups
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 2: Register MCP servers in AgentRegistry ─────────────────────────
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: register market-data-mcp (prices, history, sectors)'
+      config:
+        serverName: finflow-market-data
+        title: FinFlow Market Data
+        description: 'Real-time stock prices, historical data, and sector performance'
+        serviceName: market-data-mcp
+        serviceNamespace: finflow
+        servicePort: 8000
+        mcpPath: /mcp
+        runtimeName: finflow-mcp-gateway
+        pathSuffix: /market-data
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: register portfolio-mcp (holdings, value, P&L)'
+      config:
+        serverName: finflow-portfolio-mcp
+        title: FinFlow Portfolio
+        description: 'Portfolio holdings, current value, and profit/loss analysis'
+        serviceName: portfolio-mcp
+        serviceNamespace: finflow
+        servicePort: 8000
+        mcpPath: /mcp
+        runtimeName: finflow-mcp-gateway
+        pathSuffix: /portfolio
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: register news-mcp (headlines, sentiment)'
+      config:
+        serverName: finflow-news
+        title: FinFlow News
+        description: 'News headlines and sentiment analysis for portfolio tickers'
+        serviceName: news-mcp
+        serviceNamespace: finflow
+        servicePort: 8000
+        mcpPath: /mcp
+        runtimeName: finflow-mcp-gateway
+        pathSuffix: /news
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    - name: agentregistry-catalog
+      description: 'AgentRegistry: register brokerage-mcp (BUY/SELL, order management)'
+      config:
+        serverName: finflow-brokerage
+        title: FinFlow Brokerage
+        description: 'Stock trade execution (BUY/SELL), order status, and order history'
+        serviceName: brokerage-mcp
+        serviceNamespace: finflow
+        servicePort: 8000
+        mcpPath: /mcp
+        runtimeName: finflow-mcp-gateway
+        pathSuffix: /brokerage
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 2 (new): Register kagent provider ────────────────────────────────
+    - name: agentregistry-provider
+      description: 'AgentRegistry: register kagent as a provider for agent discovery'
+      config:
+        type: kagent
+        providerName: finflow-kagent
+        kagentControllerUrl: '{{env.internal.kagent.controllerUrl}}'
+        kagentNamespace: kagent-system
+        telemetryEndpoint: '{{env.internal.agentregistry.telemetryEndpoint}}'
+        # Required: agentregistry-enterprise now requires spec.config.auth.oidc on every
+        # kagent Runtime (see features/agentic/agentregistry-provider/index.js and
+        # docs/guides/kagent-enterprise-outbound-auth.md in agentregistry-enterprise).
+        # Same Keycloak client already provisioned for this in the kagent realm.
+        outboundAuth:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientId: agentregistry
+          clientSecret: agentregistry-secret
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 3 (new): Deploy portfolio-agent to AgentCore ─────────────────────
+    - name: agentregistry-agent
+      description: 'AgentCore: deploy finflow-portfolio-agent (portfolio analysis)'
+      config:
+        agentName: finflow-portfolio
+        title: 'FinFlow Portfolio Agent'
+        description: 'Portfolio holdings, P&L, and allocation analysis'
+        repositoryUrl: 'https://github.com/day0ops/finflow-demo'
+        repositoryBranch: 'main'
+        repositorySubfolder: 'agents/portfolio'
+        workdir: 'agents/portfolio'
+        entrypoint: 'uv run python main.py'
+        networkMode: public
+        runtimeName: aws-agentcore
+        region: '{{env.aws.region}}'
+        env:
+          LLM_BASE_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/openai/v1'
+          PORTFOLIO_MCP_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/finflow/portfolio'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 5 (new): Deploy trade-execution-agent to AgentCore ───────────────
+    - name: agentregistry-agent
+      description: 'AgentCore: deploy finflow-trade-execution-agent (BUY/SELL, orders)'
+      config:
+        agentName: finflow-trade-execution
+        title: 'FinFlow Trade Execution Agent'
+        description: 'Stock trade execution (BUY/SELL), order status, and order history'
+        repositoryUrl: 'https://github.com/day0ops/finflow-demo'
+        repositoryBranch: 'main'
+        repositorySubfolder: 'agents/trade-execution'
+        workdir: 'agents/trade-execution'
+        entrypoint: 'uv run python main.py'
+        networkMode: public
+        runtimeName: aws-agentcore
+        region: '{{env.aws.region}}'
+        env:
+          LLM_BASE_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/openai/v1'
+          BROKERAGE_MCP_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/finflow/brokerage'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 6: Deploy market-data-agent to kagent ────────────────────────────
+    - name: agentregistry-agent
+      description: 'kagent: deploy finflow-market-data (prices, history, sectors)'
+      config:
+        agentName: finflow-market-data
+        title: 'FinFlow Market Data Agent'
+        description: 'Real-time market prices, historical data, and sector performance'
+        image: '{{env.images.finflow.marketDataAgent}}'
+        runtimeName: finflow-kagent
+        region: '{{env.aws.region}}'
+        env:
+          LLM_BASE_URL: '{{env.internal.gateway.internalHost}}/openai/v1'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 7: Deploy news-sentiment-agent to kagent ─────────────────────────
+    - name: agentregistry-agent
+      description: 'kagent: deploy finflow-news-sentiment (news headlines, sentiment)'
+      config:
+        agentName: finflow-news-sentiment
+        title: 'FinFlow News Sentiment Agent'
+        description: 'News headlines and sentiment analysis for portfolio tickers'
+        image: '{{env.images.finflow.newsSentimentAgent}}'
+        runtimeName: finflow-kagent
+        region: '{{env.aws.region}}'
+        env:
+          ANTHROPIC_BASE_URL: '{{env.internal.gateway.internalHost}}/anthropic'
+          LLM_MODEL: 'claude-opus-4-6'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+    # ── Step 8: Deploy orchestrator to AgentCore ──────────────────────────────
+    - name: agentregistry-agent
+      description: 'AgentCore: deploy finflow-orchestrator (intent routing, briefing + trade dispatch)'
+      config:
+        agentName: finflow-orchestrator
+        title: 'FinFlow Orchestrator'
+        description: 'Intent-driven orchestrator — routes briefing and trade requests to sub-agents'
+        repositoryUrl: 'https://github.com/day0ops/finflow-demo'
+        repositoryBranch: 'main'
+        repositorySubfolder: 'agents/orchestrator'
+        workdir: 'agents/orchestrator'
+        entrypoint: 'uv run python main.py'
+        networkMode: public
+        runtimeName: aws-agentcore
+        region: '{{env.aws.region}}'
+        env:
+          MARKET_DATA_AGENT_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/agents/market-data'
+          PORTFOLIO_AGENT_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/agents/portfolio'
+          NEWS_SENTIMENT_AGENT_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/agents/news-sentiment'
+          TRADE_EXECUTION_AGENT_URL: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/agents/trade-execution'
+        arctl:
+          version: 'v{{env.agentregistry.version}}'
+          registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: agentregistry
+          clientId: ar-cli
+      clusters:
+        - name: east
+
+  tests:
+    - name: finflow-market-data-mcp-initialize
+      description: MCP client reaches market-data-mcp via agentgateway, agentregistry, and finflow
+      clusters:
+        - name: east
+      steps:
+        - action: send-request
+          hostname: '{{env.domains.app.main}}'
+          autoDetectGwAddress: true
+          gatewayNamespace: agentgateway-proxy
+          path: /finflow/market-data
+          method: POST
+          headers:
+            Content-Type: application/json
+            Accept: application/json, text/event-stream
+          body: '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agentic-demo","version":"1.0"}}}'
+          timeout: 30s
+          retries: 5
+          retryDelay: 6000
+        - action: verify
+          expect:
+            statusCode: 200
+
+    - name: finflow-news-mcp-initialize
+      description: MCP client reaches news-mcp via agentgateway, agentregistry, and finflow
+      clusters:
+        - name: east
+      steps:
+        - action: send-request
+          hostname: '{{env.domains.app.main}}'
+          autoDetectGwAddress: true
+          gatewayNamespace: agentgateway-proxy
+          path: /finflow/news
+          method: POST
+          headers:
+            Content-Type: application/json
+            Accept: application/json, text/event-stream
+          body: '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agentic-demo","version":"1.0"}}}'
+          timeout: 30s
+          retries: 5
+          retryDelay: 6000
+        - action: verify
+          expect:
+            statusCode: 200

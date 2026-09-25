@@ -1,0 +1,37 @@
+# Cilium base Helm values — Istio ambient compatibility (chaining mode on EKS)
+# References:
+#   https://istio.io/latest/docs/ambient/install/platform-prerequisites/#cilium
+#   https://docs.cilium.io/en/stable/installation/cni-chaining-aws-cni/
+
+# Chain with the existing AWS VPC CNI instead of replacing it
+cni:
+  chainingMode: aws-cni
+  exclusive: false
+
+# VPC CNI handles routing — disable Cilium tunnel/overlay
+routingMode: native
+
+# Required for aws-cni chaining: Cilium creates per-endpoint routes
+# so it doesn't interfere with VPC CNI's IP management
+endpointRoutes:
+  enabled: true
+
+# VPC CNI handles masquerading
+enableIPv4Masquerade: false
+enableIPv6Masquerade: false
+
+# BPF masquerading is not supported with Istio ambient
+bpf:
+  masquerade: false
+
+# Hubble observability (relay + UI)
+hubble:
+  enabled: false
+  relay:
+    enabled: false
+  ui:
+    enabled: false
+
+# disable Cilium's Envoy DaemonSet — L7 handled by Istio Ambient waypoints
+envoy:
+  enabled: false

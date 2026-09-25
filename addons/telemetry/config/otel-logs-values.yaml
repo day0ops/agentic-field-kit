@@ -1,0 +1,30 @@
+# OTel Collector — Logs (east/full mode)
+# Receives OTLP logs from local gateways (agentgateway access logs).
+# Exports to local Loki via OTLP HTTP.
+# Note: cross-cluster logs from west arrive via otel-gateway, not here.
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  exporters:
+    otlphttp/loki:
+      endpoint: 'http://loki.{{TELEMETRY_NAMESPACE}}.svc.cluster.local:3100/otlp'
+      tls:
+        insecure: true
+    otlp/solo-ui:
+      endpoint: 'solo-enterprise-telemetry-collector.{{SOLO_UI_NAMESPACE}}.svc.cluster.local:4317'
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      logs:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlphttp/loki, otlp/solo-ui]

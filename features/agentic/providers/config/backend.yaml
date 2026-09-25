@@ -1,0 +1,15 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: provider-name
+  namespace: agentgateway-system
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    agentgateway.dev/provider: provider-name
+spec:
+  ai:
+    provider: {}
+  policies:
+    auth:
+      secretRef:
+        name: provider-secret

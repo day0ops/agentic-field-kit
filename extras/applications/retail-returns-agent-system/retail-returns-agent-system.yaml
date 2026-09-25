@@ -1,0 +1,183 @@
+---
+# Retail Returns Agent System — the guided-tour UI, deployed into the retail-returns
+# namespace on the east cluster as a plain Deployment. The 4 agents run on kagent,
+# provisioned by the retail-returns-demo usecase's agentregistry-agent feature steps.
+# The 6 MCP servers (order-db, payment, shipping, inventory, fraud-scoring, carrier)
+# also run on kagent, provisioned by that same usecase's agentregistry-mcp-server
+# feature steps -- none of them live in this manifest anymore.
+#
+# Image tags come from config/environments/<env>.yaml's images.retailReturns.*
+# (see aws-dev.yaml) via {{env.images.retailReturns.*}} tokens below -- bump the
+# version there, not here.
+#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: retail-returns
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    app.kubernetes.io/part-of: retail-returns
+---
+# ────────────────────────────────────────────────────────────────────────────
+# ui — guided-tour SPA (Stage 1 only in this phase)
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: retail-returns-ui
+  namespace: retail-returns
+  labels:
+    app: retail-returns-ui
+    app.kubernetes.io/part-of: retail-returns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: retail-returns-ui
+  template:
+    metadata:
+      labels:
+        app: retail-returns-ui
+    spec:
+      containers:
+        - name: ui
+          image: '{{env.images.retailReturns.ui}}'
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          env:
+            - name: KEYCLOAK_TOKEN_URL
+              value: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/retail-returns-customers/protocol/openid-connect/token'
+            - name: KEYCLOAK_CLIENT_ID
+              value: retail-returns-ui
+            - name: KEYCLOAK_CLIENT_SECRET
+              value: retail-returns-ui-secret
+            - name: DEMO_CUSTOMER_USERNAME
+              value: demo-customer
+            # Stage 6 (budget control): second real customer, same password as the
+            # first (RETAIL_RETURNS_CUSTOMER_PASSWORD below) -- only needs a
+            # distinct identity (jwt.email) for the customerEmail budget dimension.
+            - name: DEMO_CUSTOMER_2_USERNAME
+              value: demo-customer-2
+            - name: RETAIL_RETURNS_CUSTOMER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: demo-customer-credentials
+                  key: password
+            # Stage 6: same OpenAI-compatible agentgateway route the four agents
+            # already use (see their own LLM_BASE_URL) -- the BFF calls it directly,
+            # carrying whichever demo customer's JWT, for the "make a paid call"
+            # budget demo.
+            - name: LLM_BASE_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/openai/v1'
+            - name: SUPPORT_TRIAGE_URL
+              # support-triage now runs on kagent only (retail-returns-demo usecase's
+              # agentregistry-agent step); there is no retail-returns-namespace copy.
+              value: 'http://retail-returns-support-triage.kagent-system.svc.cluster.local:8080/'
+            # Stage 5 (PII masking): order-db's normal, AgentRegistry-managed
+            # route (Strict JWT + token exchange, same one order-lookup's own
+            # ORDER_DB_URL uses) -- the "masked" side of the redacted-vs-not
+            # comparison against ORDER_DB_MCP_DIRECT_URL below.
+            - name: ORDER_DB_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/order-db'
+            # Stage 5 (progressive disclosure): order-db-mcp exposed a second
+            # time via the mcp-codemode-route feature's entMcp.codeMode
+            # Backend+HTTPRoute -- collapses its tool catalog into one
+            # code-execution meta-tool. Deliberately unauthenticated (no
+            # token passed when calling this URL), unlike ORDER_DB_MCP_URL
+            # above -- this route exists only for the comparison card.
+            - name: ORDER_DB_CODEMODE_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/order-db-codemode'
+            # Stage 4 (tool policy, deny sub-scene): payment-mcp's normal,
+            # AgentRegistry-managed route (Strict JWT + token exchange, same one
+            # refund-approval's own PAYMENT_URL uses) -- lets the BFF call
+            # refund_payment directly as a structured, unambiguous companion to
+            # the full A2A chain's own narrative reply (which never shows the
+            # deny itself -- it's several hops beyond what the chain's own
+            # artifacts expose back to the BFF).
+            - name: PAYMENT_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/payment'
+            # Stage 4 (tool policy, clickops apply/remove): the stage-policy-controller
+            # feature's own Service DNS name -- an internal, non-customer-facing service
+            # (not routed through agentgateway) this BFF calls to apply/remove the Deny
+            # policy on demand, instead of every stage's policy being pre-provisioned
+            # before the guided tour ever starts.
+            - name: STAGE_POLICY_CONTROLLER_URL
+              value: 'http://stage-policy-controller.retail-returns.svc.cluster.local:8080'
+            # Stage 5 (PII masking): order-db-mcp's own k8s Service, bypassing
+            # agentgateway (and the pii-guardrail-policy feature's CheckResponse
+            # hook) entirely -- a genuinely raw baseline for the same order,
+            # compared against ORDER_DB_MCP_URL above (which now carries the
+            # guardrail, same route real agents already use).
+            - name: ORDER_DB_MCP_DIRECT_URL
+              value: 'http://order-db-workload.kagent-system.svc.cluster.local:8080/mcp'
+            # Stage 8 (telemetry): agentgateway's access-log policy (this
+            # profile's telemetry addon, already applied cluster-wide) fans
+            # every request's structured log line into Loki -- a plain
+            # in-cluster HTTP call, not a new mechanism this app provisions.
+            - name: LOKI_URL
+              value: 'http://loki.telemetry.svc.cluster.local:3100'
+            # Tempo (same telemetry addon's tracing policy) holds the real
+            # assembled per-request span tree -- the session recap's
+            # waterfalls query this directly, not Loki, since access-log
+            # lines don't carry parent/child span relationships.
+            - name: TEMPO_URL
+              value: 'http://tempo-query-frontend.telemetry.svc.cluster.local:3200'
+            # Public hostname for the "view full trace in Grafana" deep
+            # link -- same domain the telemetry addon's own Grafana Gateway
+            # exposes (see config/profiles' grafanaHostname).
+            - name: GRAFANA_URL
+              value: 'https://{{env.domains.core.grafana}}'
+            # Stage 9 (agentgateway interactive elicitation): carrier-mcp's
+            # own AgentRegistry-managed route -- a dedicated server/Backend
+            # from shipping-mcp (see agentic-field-kit's Phase 9 plan doc),
+            # gated by entElicitation + entTokenExchange.solo.
+            - name: CARRIER_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/carrier'
+            # Stage 10 (multicluster): loyalty-rewards-mcp physically runs on
+            # the west cluster -- this path is otherwise identical in shape to
+            # CARRIER_MCP_URL/PAYMENT_URL above. Used for a direct before/after
+            # balance check, the same "unambiguous proof" pattern Stage 4's
+            # own directCheck already uses (the chain's own narrative reply
+            # alone isn't structured proof; this BFF calls the real route
+            # real agents use, with the real customer identity).
+            - name: LOYALTY_MCP_URL
+              value: '{{env.agentgateway.scheme}}://{{env.domains.app.main}}/retail-returns/loyalty-rewards'
+            # The enterprise agentgateway controller's own token-exchange/
+            # elicitation STS, reached directly (in-cluster Service DNS, not
+            # through agentgateway's own proxied routes) for its
+            # /elicitations management API.
+            - name: ELICITATION_STS_URL
+              value: 'http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777'
+          resources:
+            # Bumped from the Phase 1 static-nginx sizing -- this is now a real
+            # Node BFF process (Express + serving the static build), not just
+            # nginx serving files.
+            requests: { memory: '96Mi', cpu: '50m' }
+            limits: { memory: '256Mi', cpu: '250m' }
+          readinessProbe:
+            tcpSocket: { port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 80 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retail-returns-ui
+  namespace: retail-returns
+  labels:
+    app: retail-returns-ui
+    app.kubernetes.io/part-of: retail-returns
+spec:
+  selector:
+    app: retail-returns-ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      appProtocol: http
+  type: ClusterIP

@@ -1,0 +1,91 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: request-routing
+  description: Simple HTTP request routing with httpbin on a single cluster
+spec:
+  category: traffic-management
+
+  requires:
+    applications:
+      - name: httpbin
+        namespace: httpbin
+
+  features:
+    - name: gateway
+      description: Expose httpbin via an Istio Gateway
+      config:
+        gatewayName: httpbin-gateway
+        namespace: httpbin
+        gateway:
+          listeners:
+            - name: http
+              port: 80
+              protocol: HTTP
+              allowedRoutes:
+                namespaces:
+                  from: Same
+
+    - name: request-routing
+      description: Route traffic to httpbin via HTTPRoute
+      config:
+        routeName: httpbin-route
+        namespace: httpbin
+        gatewayName: httpbin-gateway
+        gatewayNamespace: httpbin
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /get
+            backendRefs:
+              - name: httpbin
+                port: 8000
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /headers
+            backendRefs:
+              - name: httpbin
+                port: 8000
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /status
+            backendRefs:
+              - name: httpbin
+                port: 8000
+
+  tests:
+    - name: httpbin-get
+      description: Verify GET endpoint is routable
+      steps:
+        - action: send-request
+          autoDetectGwAddress: true
+          path: /get
+          timeout: 30s
+        - action: verify
+          expect:
+            statusCode: 200
+
+    - name: httpbin-headers
+      description: Verify headers endpoint is routable
+      steps:
+        - action: send-request
+          autoDetectGwAddress: true
+          path: /headers
+          timeout: 30s
+        - action: verify
+          expect:
+            statusCode: 200
+
+    - name: httpbin-status-418
+      description: Verify custom status code passthrough
+      steps:
+        - action: send-request
+          autoDetectGwAddress: true
+          path: /status/418
+          timeout: 30s
+        - action: verify
+          expect:
+            statusCode: 418

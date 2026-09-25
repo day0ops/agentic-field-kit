@@ -1,0 +1,17 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: gke-single-cluster
+  description: GKE single cluster
+
+spec:
+  provider: gke
+  region: australia-southeast1
+  settings:
+    nodes:
+      desired: 2
+      type: n1-standard-2
+
+  clusters:
+    - name: demo
+      role: workload

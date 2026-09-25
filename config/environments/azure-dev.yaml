@@ -1,0 +1,96 @@
+apiVersion: agentic.demo/v1
+kind: Environment
+metadata:
+  name: azure-dev
+  description: Azure AKS environment
+
+spec:
+  aks:
+    region: Australia East
+
+  acme:
+    email: kasun.talwatta@solo.io
+
+  tls:
+    issuer: selfsigned-issuer
+
+  # Okta tenant
+  okta:
+    domain: integrator-1335842.okta.com
+
+  keycloak:
+    scheme: https
+    image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.3
+
+  agentregistry:
+    scheme: https
+    version: 2026.8.0
+
+  agentgateway:
+    scheme: https
+    version: v2026.8.2
+
+  kagent:
+    scheme: https
+    version: 0.5.6
+
+  soloUi:
+    version: 0.5.6
+
+  images:
+    finflow:
+      marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.2
+      newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.2
+    retailReturns:
+      supportTriage: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-support-triage:v0.1.0
+      orderLookup: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-order-lookup:v0.1.0
+      fraudCheck: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-fraud-check:v0.1.0
+      refundApproval: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-refund-approval:v0.1.0
+      orderDb: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-order-db:v0.1.0
+      payment: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-payment:v0.1.0
+      shipping: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-shipping:v0.1.0
+      inventory: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-inventory:v0.1.0
+      fraudScoring: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-fraud-scoring:v0.1.0
+      carrier: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-carrier:v0.1.0
+      loyaltyRewards: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-loyalty-rewards:v0.1.0
+      ui: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-ui:v0.1.0
+      piiGuardrail: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-pii-guardrail:v0.1.0
+      stagePolicyController: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-stage-policy-controller:v0.1.0
+      returnsEligibility: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-returns-eligibility:v0.1.0
+      accessPolicyTestHarness: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/retail-returns-access-policy-test-harness:v0.1.0
+    sreIRS:
+      agent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-agent:v0.1.0
+      incidentMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-incident-mcp:v0.1.0
+      runbookMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-runbook-mcp:v0.1.0
+      repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
+      chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
+
+  # Internal cluster/mesh FQDNs (not publicly routable)
+  internal:
+    gateway:
+      internalHost: http://hub-agentgateway-proxy.agentgateway-proxy.svc.cluster.local
+    telemetry:
+      otelTracesCollector: opentelemetry-collector-traces.telemetry.svc.cluster.local
+      otelGatewayEndpoint: opentelemetry-collector-gateway.telemetry.mesh.internal
+      lokiPushUrl: http://loki.telemetry.mesh.internal:3100/loki/api/v1/push
+    agentregistry:
+      telemetryEndpoint: http://agentregistry-enterprise-telemetry-collector.agentregistry-system.svc.cluster.local:4318
+    kagent:
+      controllerUrl: http://kagent-controller.kagent-system.svc.cluster.local:8083
+    soloUi:
+      tunnelFqdn: solo-enterprise-ui.solo-enterprise.mesh.internal
+      telemetryFqdn: solo-enterprise-telemetry-gateway.solo-enterprise.mesh.internal
+
+  domains:
+    core:
+      keycloak: keycloak.agentic-demo-aks.kasunt.apac.fe.solo.io
+      grafana: grafana.agentic-demo-aks.kasunt.apac.fe.solo.io
+      agentregistryUi: agentregistry-ui.agentic-demo-aks.kasunt.apac.fe.solo.io
+      agentregistryTelemetry: agentregistry-telemetry.agentic-demo-aks.kasunt.apac.fe.solo.io
+      soloUi: soloui.agentic-demo-aks.kasunt.apac.fe.solo.io
+      kagentUi: kagent-ui.agentic-demo-aks.kasunt.apac.fe.solo.io
+      agentgatewayUi: agw-ui.agentic-demo-aks.kasunt.apac.fe.solo.io
+      meshUi: mesh-ui.agentic-demo-aks.kasunt.apac.fe.solo.io
+    app:
+      main: app.agentic-demo-aks.kasunt.apac.fe.solo.io
+      retailReturns: retail-returns.agentic-demo-aks.kasunt.apac.fe.solo.io

@@ -1,0 +1,689 @@
+---
+# FinFlow MCP servers — deployed into the finflow namespace on the east cluster.
+# Agents running on AgentCore discover these via AgentRegistry (see finflow-demo usecase).
+#
+# Images: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-<name>:<tag>
+# Tag pinned to 0.1.1; update when a new release is cut.
+#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: finflow
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    app.kubernetes.io/part-of: finflow
+---
+# ────────────────────────────────────────────────────────────────────────────
+# mock-data — shared mock market data mounted at /infra/mock-data in all pods
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-data
+  namespace: finflow
+  labels:
+    app.kubernetes.io/part-of: finflow
+data:
+  tickers.json: |
+    {
+      "NVDA": {
+        "ticker": "NVDA",
+        "name": "NVIDIA Corporation",
+        "price": 875.40,
+        "change_pct": 2.34,
+        "volume": 42318500,
+        "sector": "Technology",
+        "history": [
+          {"date": "2026-06-09", "close": 875.40},
+          {"date": "2026-06-06", "close": 852.10},
+          {"date": "2026-06-05", "close": 841.30},
+          {"date": "2026-06-04", "close": 858.90},
+          {"date": "2026-06-03", "close": 831.20}
+        ]
+      },
+      "AAPL": {
+        "ticker": "AAPL",
+        "name": "Apple Inc.",
+        "price": 221.55,
+        "change_pct": -0.42,
+        "volume": 58920000,
+        "sector": "Technology",
+        "history": [
+          {"date": "2026-06-09", "close": 221.55},
+          {"date": "2026-06-06", "close": 222.48},
+          {"date": "2026-06-05", "close": 219.32},
+          {"date": "2026-06-04", "close": 224.10},
+          {"date": "2026-06-03", "close": 220.80}
+        ]
+      },
+      "MSFT": {
+        "ticker": "MSFT",
+        "name": "Microsoft Corporation",
+        "price": 452.30,
+        "change_pct": 1.17,
+        "volume": 23450000,
+        "sector": "Technology",
+        "history": [
+          {"date": "2026-06-09", "close": 452.30},
+          {"date": "2026-06-06", "close": 447.06},
+          {"date": "2026-06-05", "close": 441.82},
+          {"date": "2026-06-04", "close": 449.15},
+          {"date": "2026-06-03", "close": 438.60}
+        ]
+      },
+      "GOOGL": {
+        "ticker": "GOOGL",
+        "name": "Alphabet Inc.",
+        "price": 193.75,
+        "change_pct": 0.83,
+        "volume": 31280000,
+        "sector": "Technology",
+        "history": [
+          {"date": "2026-06-09", "close": 193.75},
+          {"date": "2026-06-06", "close": 192.14},
+          {"date": "2026-06-05", "close": 188.92},
+          {"date": "2026-06-04", "close": 191.50},
+          {"date": "2026-06-03", "close": 187.30}
+        ]
+      }
+    }
+  news.json: |
+    {
+      "NVDA": [
+        {"headline": "NVIDIA Hopper successor hits record pre-orders ahead of data center wave", "source": "Reuters", "date": "2026-06-08", "sentiment": "positive", "score": 0.88},
+        {"headline": "NVIDIA expands AI partnership with major cloud providers", "source": "Bloomberg", "date": "2026-06-07", "sentiment": "positive", "score": 0.76},
+        {"headline": "Analyst raises NVDA price target on strong AI chip demand", "source": "CNBC", "date": "2026-06-06", "sentiment": "positive", "score": 0.72}
+      ],
+      "AAPL": [
+        {"headline": "Apple faces regulatory scrutiny over App Store fees in EU", "source": "Reuters", "date": "2026-06-08", "sentiment": "negative", "score": -0.45},
+        {"headline": "Apple WWDC hints at AI-powered features in iOS 21", "source": "TechCrunch", "date": "2026-06-07", "sentiment": "positive", "score": 0.65},
+        {"headline": "iPhone 18 supply chain ramp-up begins in Vietnam factories", "source": "Bloomberg", "date": "2026-06-06", "sentiment": "neutral", "score": 0.12}
+      ],
+      "MSFT": [
+        {"headline": "Microsoft Copilot+ PC adoption accelerates enterprise AI push", "source": "ZDNet", "date": "2026-06-08", "sentiment": "positive", "score": 0.81},
+        {"headline": "Azure cloud revenue grows 42% year-over-year in latest quarter", "source": "CNBC", "date": "2026-06-07", "sentiment": "positive", "score": 0.90},
+        {"headline": "Microsoft faces antitrust review over Teams bundling in Europe", "source": "Reuters", "date": "2026-06-05", "sentiment": "negative", "score": -0.38}
+      ],
+      "GOOGL": [
+        {"headline": "Google DeepMind releases next-gen Gemini model outperforming GPT-5", "source": "Wired", "date": "2026-06-09", "sentiment": "positive", "score": 0.92},
+        {"headline": "Alphabet ad revenue beats estimates on AI-optimized targeting", "source": "Bloomberg", "date": "2026-06-07", "sentiment": "positive", "score": 0.78},
+        {"headline": "Google Cloud wins multi-billion deal with federal agency", "source": "Reuters", "date": "2026-06-06", "sentiment": "positive", "score": 0.82}
+      ]
+    }
+  holdings.sql: |
+    CREATE TABLE IF NOT EXISTS holdings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        shares REAL NOT NULL,
+        cost_basis REAL NOT NULL,
+        UNIQUE(user_id, ticker)
+    );
+    INSERT OR REPLACE INTO holdings (user_id, ticker, shares, cost_basis) VALUES
+      ('morgan', 'NVDA',  100.0,  95.40),
+      ('morgan', 'AAPL',   50.0, 155.20),
+      ('morgan', 'MSFT',  200.0, 380.90),
+      ('morgan', 'GOOGL',  30.0, 148.60),
+      ('alex',   'AAPL',   50.0, 160.50),
+      ('alex',   'MSFT',  100.0, 395.20);
+---
+# ────────────────────────────────────────────────────────────────────────────
+# market-data-mcp — real-time prices, historical data, sector performance
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-data-mcp
+  namespace: finflow
+  labels:
+    app: market-data-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: market-data-mcp
+  template:
+    metadata:
+      labels:
+        app: market-data-mcp
+    spec:
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-mcp:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          volumeMounts:
+            - name: mock-data
+              mountPath: /infra/mock-data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: mock-data
+          configMap:
+            name: mock-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-data-mcp
+  namespace: finflow
+  labels:
+    app: market-data-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: market-data-mcp
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+      appProtocol: agentgateway.dev/mcp
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# portfolio-mcp — holdings, value, P&L (SQLite-backed; init container seeds DB)
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: portfolio-seed-sql
+  namespace: finflow
+  labels:
+    app.kubernetes.io/part-of: finflow
+data:
+  holdings.sql: |
+    CREATE TABLE IF NOT EXISTS holdings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        shares REAL NOT NULL,
+        cost_basis REAL NOT NULL,
+        UNIQUE(user_id, ticker)
+    );
+    INSERT OR REPLACE INTO holdings (user_id, ticker, shares, cost_basis) VALUES
+      ('morgan', 'NVDA',  100.0,  95.40),
+      ('morgan', 'AAPL',   50.0, 155.20),
+      ('morgan', 'MSFT',  200.0, 380.90),
+      ('morgan', 'GOOGL',  30.0, 148.60),
+      ('alex',   'AAPL',   50.0, 160.50),
+      ('alex',   'MSFT',  100.0, 395.20);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portfolio-mcp
+  namespace: finflow
+  labels:
+    app: portfolio-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portfolio-mcp
+  template:
+    metadata:
+      labels:
+        app: portfolio-mcp
+    spec:
+      initContainers:
+        - name: seed-db
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-portfolio-mcp:0.1.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - uv
+            - run
+            - python
+            - -c
+            - |
+              import sqlite3, pathlib
+              sql = pathlib.Path('/seed/holdings.sql').read_text()
+              conn = sqlite3.connect('/data/portfolio.db')
+              conn.executescript(sql)
+              conn.commit()
+          volumeMounts:
+            - name: db-data
+              mountPath: /data
+            - name: seed-data
+              mountPath: /seed
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-portfolio-mcp:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DB_PATH
+              value: /data/portfolio.db
+          volumeMounts:
+            - name: db-data
+              mountPath: /data
+            - name: mock-data
+              mountPath: /infra/mock-data
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: db-data
+          emptyDir: {}
+        - name: seed-data
+          configMap:
+            name: portfolio-seed-sql
+        - name: mock-data
+          configMap:
+            name: mock-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portfolio-mcp
+  namespace: finflow
+  labels:
+    app: portfolio-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: portfolio-mcp
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+      appProtocol: agentgateway.dev/mcp
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# news-mcp — news headlines and sentiment analysis for tickers
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-mcp
+  namespace: finflow
+  labels:
+    app: news-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: news-mcp
+  template:
+    metadata:
+      labels:
+        app: news-mcp
+    spec:
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-mcp:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: mock-data
+              mountPath: /infra/mock-data
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: mock-data
+          configMap:
+            name: mock-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: news-mcp
+  namespace: finflow
+  labels:
+    app: news-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: news-mcp
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+      appProtocol: agentgateway.dev/mcp
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# brokerage-mcp — trade execution (BUY/SELL), order status and history
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brokerage-mcp
+  namespace: finflow
+  labels:
+    app: brokerage-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: brokerage-mcp
+  template:
+    metadata:
+      labels:
+        app: brokerage-mcp
+    spec:
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-brokerage-mcp:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: mock-data
+              mountPath: /infra/mock-data
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: mock-data
+          configMap:
+            name: mock-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brokerage-mcp
+  namespace: finflow
+  labels:
+    app: brokerage-mcp
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: brokerage-mcp
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+      appProtocol: agentgateway.dev/mcp
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# orchestrator — A2A orchestrator agent; coordinates sub-agents via A2A protocol
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: finflow
+  labels:
+    app: orchestrator
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-orchestrator:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MARKET_DATA_AGENT_URL
+              value: 'http://market-data-agent.finflow.svc.cluster.local:8000'
+            - name: NEWS_SENTIMENT_AGENT_URL
+              value: 'http://news-sentiment-agent.finflow.svc.cluster.local:8000'
+            - name: PORTFOLIO_AGENT_URL
+              value: 'http://hub-agentgateway-proxy.agentgateway-proxy.svc.cluster.local/finflow/portfolio-agent'
+            - name: TRADE_EXECUTION_AGENT_URL
+              value: 'http://hub-agentgateway-proxy.agentgateway-proxy.svc.cluster.local/finflow/trade-execution-agent'
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: finflow
+  labels:
+    app: orchestrator
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: orchestrator
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      appProtocol: http
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# market-data-agent — A2A agent for real-time prices and historical market data
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-data-agent
+  namespace: finflow
+  labels:
+    app: market-data-agent
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: market-data-agent
+  template:
+    metadata:
+      labels:
+        app: market-data-agent
+    spec:
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: LLM_BASE_URL
+              value: '{{env.internal.gateway.internalHost}}/openai/v1'
+            - name: LLM_API_KEY
+              value: 'demo'
+            - name: LLM_MODEL
+              value: 'openai/claude-sonnet-4-6'
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-data-agent
+  namespace: finflow
+  labels:
+    app: market-data-agent
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: market-data-agent
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      appProtocol: http
+  type: ClusterIP
+---
+# ────────────────────────────────────────────────────────────────────────────
+# news-sentiment-agent — A2A agent for news headlines and sentiment analysis
+# ────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-sentiment-agent
+  namespace: finflow
+  labels:
+    app: news-sentiment-agent
+    app.kubernetes.io/part-of: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: news-sentiment-agent
+  template:
+    metadata:
+      labels:
+        app: news-sentiment-agent
+    spec:
+      containers:
+        - name: server
+          image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ANTHROPIC_BASE_URL
+              value: '{{env.internal.gateway.internalHost}}/anthropic'
+            - name: LLM_API_KEY
+              value: 'demo'
+            - name: LLM_MODEL
+              value: 'claude-opus-4-6'
+          resources:
+            requests:
+              memory: '128Mi'
+              cpu: '100m'
+            limits:
+              memory: '256Mi'
+              cpu: '500m'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: news-sentiment-agent
+  namespace: finflow
+  labels:
+    app: news-sentiment-agent
+    app.kubernetes.io/part-of: finflow
+spec:
+  selector:
+    app: news-sentiment-agent
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      appProtocol: http
+  type: ClusterIP

@@ -1,0 +1,24 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: eks-multi-cluster
+  description: EKS multi-cluster setup (east, west)
+
+spec:
+  name: maple
+  provider: eks
+  environment: aws-dev
+
+  settings:
+    nodes:
+      min: 4
+      max: 4
+      desired: 4
+      type: t3.xlarge
+      private: true
+
+  clusters:
+    - name: east
+      role: workload
+    - name: west
+      role: workload

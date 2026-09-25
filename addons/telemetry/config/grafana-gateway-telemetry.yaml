@@ -1,0 +1,14 @@
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: grafana-gateway-no-trace
+  namespace: telemetry
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    agentic.demo/feature: telemetry
+spec:
+  selector:
+    matchLabels:
+      istio.io/gateway-name: grafana-https
+  tracing:
+    - disableSpanReporting: true

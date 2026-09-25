@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres
+  namespace: '{{NAMESPACE}}'
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: '{{NAMESPACE}}'
+type: Opaque
+stringData:
+  POSTGRES_USER: '{{POSTGRES_USER}}'
+  POSTGRES_PASSWORD: '{{POSTGRES_PASSWORD}}'
+  POSTGRES_DB: keycloak
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: '{{NAMESPACE}}'
+spec:
+  storageClassName: '{{STORAGE_CLASS_NAME}}'
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: '{{POSTGRES_PVC_SIZE}}'
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: postgres
+spec:
+  ports:
+    - port: 5432
+      name: postgres
+  selector:
+    app: postgres
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: '{{NAMESPACE}}'
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      serviceAccountName: postgres
+      containers:
+        - name: postgres
+          image: 'postgres:{{POSTGRES_VERSION}}'
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          ports:
+            - containerPort: 5432
+              name: postgres
+          securityContext:
+            privileged: false
+          resources:
+            limits:
+              memory: 512Mi
+              cpu: '1'
+            requests:
+              memory: 256Mi
+              cpu: '0.2'
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc

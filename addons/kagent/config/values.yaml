@@ -1,0 +1,14 @@
+# addons/kagent/config/values.yaml
+# Base values — override as needed
+
+database:
+  postgres:
+    bundled:
+      enabled: true
+
+rbac:
+  roleMapping:
+    # Guard against missing Groups claim — client_credentials tokens from service accounts
+    # may not carry Groups until the service account is added to a group in the IdP.
+    # Without the guard, CEL evaluates a missing claim as a runtime error → 401.
+    roleMapper: 'has(claims.Groups) ? claims.Groups.transformList(i, v, v in rolesMap, rolesMap[v]) : []'

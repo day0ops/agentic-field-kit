@@ -1,0 +1,19 @@
+# -- Cluster name
+cluster: 'default'
+
+# -- Enable Istio Ambient mesh product
+products:
+  mesh:
+    enabled: true
+
+# -- ClickHouse storage
+clickhouse:
+  persistentVolume:
+    enabled: true
+    storageClass: null
+    size: 10Gi
+
+# -- RBAC role mapping
+rbac:
+  roleMapping:
+    roleMapper: 'has(claims.Groups) ? claims.Groups.transformList(i, v, v in rolesMap, rolesMap[v]) : []'

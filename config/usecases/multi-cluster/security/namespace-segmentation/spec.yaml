@@ -1,0 +1,84 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: namespace-segmentation
+  description: Create namespace-scoped segments for DNS domain isolation across clusters
+spec:
+  category: multicluster
+  clusters:
+    - name: WEST
+      infra: eks-ipv6
+    - name: EAST
+      infra: eks-ipv6
+  requires:
+    applications:
+      - name: bookinfo
+        namespace: bookinfo
+        clusters:
+          - name: WEST
+            infra: eks-ipv6
+          - name: EAST
+            infra: eks-ipv6
+
+  features:
+    - name: eastwest-gateway
+      description: Deploy east-west gateways on all clusters
+      config:
+        namespace: istio-eastwest
+        method: istioctl
+        clusters:
+          - name: WEST
+            context: '{{WEST_CONTEXT}}'
+          - name: EAST
+            context: '{{EAST_CONTEXT}}'
+
+    - name: cluster-link
+      description: Link clusters
+      config:
+        namespace: istio-eastwest
+        verify: true
+        clusters:
+          - name: WEST
+            context: '{{WEST_CONTEXT}}'
+          - name: EAST
+            context: '{{EAST_CONTEXT}}'
+
+    - name: segment
+      description: Create team-a segment with DNS isolation
+      config:
+        segmentName: team-a
+        namespace: gloo-mesh
+        domain: team-a.global
+        namespaceSelector:
+          matchLabels:
+            team: team-a
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+    - name: segment
+      description: Create team-b segment with DNS isolation
+      config:
+        segmentName: team-b
+        namespace: gloo-mesh
+        domain: team-b.global
+        namespaceSelector:
+          matchLabels:
+            team: team-b
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+
+  tests:
+    - name: segment-dns-resolution
+      description: Verify namespace segments are created for DNS isolation
+      clusters:
+        - name: WEST
+          infra: eks-ipv6
+      steps:
+        - action: exec
+          command: kubectl get segments -n gloo-mesh -o name
+          timeout: 15s
+        - action: verify
+          expect:
+            contains: segment
