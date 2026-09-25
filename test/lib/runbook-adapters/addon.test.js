@@ -115,7 +115,12 @@ test('AddonAdapter.generatePreambles returns one preamble per addon needing one,
     profile: {
       spec: {
         addons: {
-          global: [{ name: 'spire', config: { trustDomain: '{{cluster.name}}.local', distinctRoots: true } }],
+          global: [
+            {
+              name: 'spire',
+              config: { trustDomain: '{{cluster.name}}.local', distinctRoots: true },
+            },
+          ],
           clusters: [],
         },
       },

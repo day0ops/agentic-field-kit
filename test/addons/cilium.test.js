@@ -1,5 +1,8 @@
 import { test, expect } from 'bun:test';
-import { generate as ciliumRunbookGenerate, cleanup as ciliumRunbookCleanup } from '../../addons/cilium/runbook.js';
+import {
+  generate as ciliumRunbookGenerate,
+  cleanup as ciliumRunbookCleanup,
+} from '../../addons/cilium/runbook.js';
 
 test('cilium runbook generate targets the cluster it is installed on', async () => {
   const md = await ciliumRunbookGenerate(1, { version: '1.19.4' }, 'east', {}, { spec: {} });

@@ -135,7 +135,9 @@ export class AddonAdapter {
       lines.push(`**${addon.name} ${label}**`);
       lines.push('');
       if (!sidecar?.cleanup) {
-        lines.push(`_No cleanup sidecar found for \`${addon.name}\`. Remove it manually if needed._`);
+        lines.push(
+          `_No cleanup sidecar found for \`${addon.name}\`. Remove it manually if needed._`
+        );
       } else {
         lines.push(await sidecar.cleanup(addon, clusterName));
       }

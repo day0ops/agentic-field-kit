@@ -50,9 +50,7 @@ export class McpToolPolicyFeature extends Feature {
     if (!this.policyName) throw new Error('mcp-tool-policy: policyName is required');
     if (!this.namespace) throw new Error('mcp-tool-policy: namespace is required');
     if (!this.mcpServerName && !this.staticBackendName)
-      throw new Error(
-        'mcp-tool-policy: mcpServerName is required unless staticBackendName is set'
-      );
+      throw new Error('mcp-tool-policy: mcpServerName is required unless staticBackendName is set');
     if (this.matchExpressions.length === 0)
       throw new Error('mcp-tool-policy: matchExpressions is required (non-empty)');
     return true;

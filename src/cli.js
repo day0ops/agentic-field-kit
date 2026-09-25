@@ -961,7 +961,9 @@ runbookCmd.addCommand(
     .description('Interactively generate a setup runbook from a profile')
     .option('--output <dir>', 'Output directory', 'docs/runbooks')
     .option('--filename <name>', 'Output filename (without .md extension)')
-    .addOption(new Option('--format <fmt>', 'Output format').choices(['md', 'html', 'both']).default('md'))
+    .addOption(
+      new Option('--format <fmt>', 'Output format').choices(['md', 'html', 'both']).default('md')
+    )
     .action(async options => {
       const { RunbookPicker, RunbookBuilder } = await import('./lib/runbook.js');
       const picker = new RunbookPicker();

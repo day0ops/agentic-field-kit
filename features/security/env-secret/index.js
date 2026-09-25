@@ -41,7 +41,10 @@ export class EnvSecretFeature extends Feature {
       metadata: {
         name: this.secretName,
         namespace: this.namespace,
-        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo', 'agentic.demo/feature': this.name },
+        labels: {
+          'app.kubernetes.io/managed-by': 'agentic-demo',
+          'agentic.demo/feature': this.name,
+        },
       },
       type: 'Opaque',
       stringData: { [this.key]: this.value },

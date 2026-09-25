@@ -153,7 +153,9 @@ export class AgentregistryProviderFeature extends Feature {
           'agentregistry-provider: outboundAuth.keycloakHostname (or outboundAuth.issuer) is required for type "kagent"'
         );
       if (!this.outboundAuthClientId)
-        throw new Error('agentregistry-provider: outboundAuth.clientId is required for type "kagent"');
+        throw new Error(
+          'agentregistry-provider: outboundAuth.clientId is required for type "kagent"'
+        );
       if (!this.outboundAuthClientSecret)
         throw new Error(
           'agentregistry-provider: outboundAuth.clientSecret is required for type "kagent"'

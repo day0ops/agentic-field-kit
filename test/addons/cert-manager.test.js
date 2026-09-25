@@ -10,8 +10,10 @@ test('cert-manager runbook generate targets the cluster it is installed on', asy
   expect(md).toContain('kubectl apply --context $EAST_CONTEXT -f - <<EOF');
 });
 
-test('cert-manager runbook generate creates the Let\'s Encrypt ClusterIssuer on the target cluster', async () => {
-  const addonCfg = { config: { letsencrypt: { enabled: true, email: 'a@b.com', region: 'us-east-1' } } };
+test("cert-manager runbook generate creates the Let's Encrypt ClusterIssuer on the target cluster", async () => {
+  const addonCfg = {
+    config: { letsencrypt: { enabled: true, email: 'a@b.com', region: 'us-east-1' } },
+  };
   const md = await certManagerRunbookGenerate(1, addonCfg, 'west', {}, { spec: {} });
   const occurrences = md.split('kubectl apply --context $WEST_CONTEXT -f - <<EOF').length - 1;
   expect(occurrences).toBe(2); // self-signed issuer + letsencrypt-dns issuer

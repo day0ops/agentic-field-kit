@@ -16,6 +16,8 @@ Full reference for the `agentic` CLI, Makefile targets, built-in profiles, envir
 | `aks-multi-cluster`       | AKS             | 2 (east, west)                         |
 | `hybrid-multi-cloud`      | EKS + GKE + AKS | 3 (mgmt on EKS, workload on GKE + AKS) |
 
+![](../images/infra.gif)
+
 ## Installation Profiles
 
 | Profile                                                           | Description                                                                                                            |

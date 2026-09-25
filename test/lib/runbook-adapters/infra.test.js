@@ -92,7 +92,10 @@ test('InfraAdapter.generateProvisioning substitutes DNS zone id/domain/child-zon
     environment: {
       spec: {
         aws: { region: 'ap-southeast-1' },
-        dns: { parentZone: { domain: 'kasunt.apac.fe.solo.io', hostedZoneId: 'Z12345' }, childZone: 'mesh-demo' },
+        dns: {
+          parentZone: { domain: 'kasunt.apac.fe.solo.io', hostedZoneId: 'Z12345' },
+          childZone: 'mesh-demo',
+        },
       },
     },
   };

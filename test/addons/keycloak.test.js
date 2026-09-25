@@ -67,7 +67,9 @@ import {
 
 function profileWith(eastAddonNames) {
   return {
-    spec: { addons: { clusters: [{ name: 'east', addons: eastAddonNames.map(name => ({ name })) }] } },
+    spec: {
+      addons: { clusters: [{ name: 'east', addons: eastAddonNames.map(name => ({ name })) }] },
+    },
   };
 }
 
@@ -89,7 +91,9 @@ test('keycloak runbook generate omits the external-dns annotation step when exte
 
 test('keycloak runbook cleanup deletes the namespace only, not the full manifests', async () => {
   const md = await keycloakRunbookCleanup({ namespace: 'keycloak' }, 'east');
-  expect(md).toContain('kubectl --context $EAST_CONTEXT delete namespace keycloak --ignore-not-found=true');
+  expect(md).toContain(
+    'kubectl --context $EAST_CONTEXT delete namespace keycloak --ignore-not-found=true'
+  );
   expect(md).not.toContain('apiVersion:');
   expect(md).not.toContain('<<EOF');
 });

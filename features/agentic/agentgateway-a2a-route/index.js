@@ -82,7 +82,10 @@ export class AgentgatewayA2ARouteFeature extends Feature {
       metadata: {
         name,
         namespace: this.namespace,
-        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo', 'agentic.demo/feature': this.name },
+        labels: {
+          'app.kubernetes.io/managed-by': 'agentic-demo',
+          'agentic.demo/feature': this.name,
+        },
       },
       spec: {
         a2a: { host: this.agentServiceHost, port: this.agentServicePort },
@@ -97,7 +100,10 @@ export class AgentgatewayA2ARouteFeature extends Feature {
       metadata: {
         name: this.backendName,
         namespace: this.namespace,
-        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo', 'agentic.demo/feature': this.name },
+        labels: {
+          'app.kubernetes.io/managed-by': 'agentic-demo',
+          'agentic.demo/feature': this.name,
+        },
       },
       spec: {
         parentRefs: [{ name: this.gatewayName, namespace: this.gatewayNamespace }],
@@ -146,7 +152,10 @@ export class AgentgatewayA2ARouteFeature extends Feature {
       metadata: {
         name: `${this.backendName}-card`,
         namespace: this.namespace,
-        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo', 'agentic.demo/feature': this.name },
+        labels: {
+          'app.kubernetes.io/managed-by': 'agentic-demo',
+          'agentic.demo/feature': this.name,
+        },
       },
       spec: {
         parentRefs: [{ name: this.gatewayName, namespace: this.gatewayNamespace }],
@@ -156,7 +165,9 @@ export class AgentgatewayA2ARouteFeature extends Feature {
             filters: [
               {
                 type: 'URLRewrite',
-                urlRewrite: { path: { type: 'ReplacePrefixMatch', replacePrefixMatch: '/.well-known' } },
+                urlRewrite: {
+                  path: { type: 'ReplacePrefixMatch', replacePrefixMatch: '/.well-known' },
+                },
               },
             ],
             backendRefs: [

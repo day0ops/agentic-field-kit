@@ -83,8 +83,7 @@ export class BudgetPolicyFeature extends Feature {
       throw new Error('budget-policy: budgets is required (non-empty)');
     if (!this.jwtIssuer) throw new Error('budget-policy: jwtIssuer is required');
     if (!this.jwksPath) throw new Error('budget-policy: jwksPath is required');
-    if (!this.keycloakNamespace)
-      throw new Error('budget-policy: keycloak.namespace is required');
+    if (!this.keycloakNamespace) throw new Error('budget-policy: keycloak.namespace is required');
     return true;
   }
 
@@ -180,7 +179,12 @@ export class BudgetPolicyFeature extends Feature {
         this.namespace,
         context
       );
-      await this.deleteResource('enterpriseagentgatewaybudget', this.budgetName, this.namespace, context);
+      await this.deleteResource(
+        'enterpriseagentgatewaybudget',
+        this.budgetName,
+        this.namespace,
+        context
+      );
     }
     this.log(`Budget '${this.budgetName}' and its traffic policy removed`, 'success');
   }

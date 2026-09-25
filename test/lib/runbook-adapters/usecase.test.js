@@ -13,7 +13,8 @@ const baseUsecase = {
         steps: [
           {
             action: 'exec',
-            command: 'kubectl get serviceentry -n istio-system -o jsonpath=\'{.items[*].spec.hosts[*]}\'',
+            command:
+              "kubectl get serviceentry -n istio-system -o jsonpath='{.items[*].spec.hosts[*]}'",
             retries: 5,
             retryDelay: 6000,
             timeout: '30s',
@@ -59,7 +60,7 @@ test('UseCaseAdapter._renderDeploy targets the application manifest at the clust
     spec: { requires: { applications: [{ name: 'bookinfo', clusters: [{ name: 'west' }] }] } },
   };
   const md = adapter._renderDeploy(usecase, options);
-  expect(md).toContain('kubectl apply --context $WEST_CONTEXT -f - <<\'EOF\'');
+  expect(md).toContain("kubectl apply --context $WEST_CONTEXT -f - <<'EOF'");
 });
 
 test('UseCaseAdapter._renderDeploy renders feature steps without a heading for tests or cleanup', () => {
@@ -67,7 +68,9 @@ test('UseCaseAdapter._renderDeploy renders feature steps without a heading for t
   const usecase = {
     metadata: { name: 'my-usecase' },
     spec: {
-      features: [{ name: 'mcp-server', description: 'Deploy MCP server', config: { namespace: 'mcp' } }],
+      features: [
+        { name: 'mcp-server', description: 'Deploy MCP server', config: { namespace: 'mcp' } },
+      ],
     },
   };
   const md = adapter._renderDeploy(usecase, options);
@@ -91,7 +94,12 @@ test('UseCaseAdapter._renderDeploy resolves {{env.domains.*}} templates to $ENV_
             gatewayName: 'g',
             namespace: 'ns',
             hostname: '{{env.domains.app.main}}',
-            rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }], backendRefs: [{ name: 'b' }] }],
+            rules: [
+              {
+                matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+                backendRefs: [{ name: 'b' }],
+              },
+            ],
           },
           clusters: [{ name: 'east' }],
         },
@@ -153,7 +161,9 @@ test('UseCaseAdapter._renderSingleTest renders verify-resource as a kubectl json
     "kubectl --context $EAST_CONTEXT get ServiceEntry reviews -n istio-system -o jsonpath='{.spec.hosts[0]}'"
   );
   expect(md).not.toContain('# expect:');
-  expect(md).toContain('`ServiceEntry/reviews` (`istio-system`) at `{.spec.hosts[0]}` is `reviews.bookinfo.mesh.internal`');
+  expect(md).toContain(
+    '`ServiceEntry/reviews` (`istio-system`) at `{.spec.hosts[0]}` is `reviews.bookinfo.mesh.internal`'
+  );
 });
 
 test('UseCaseAdapter._renderSingleTest reconstructs the send-request curl invocation', () => {
@@ -179,7 +189,11 @@ test('UseCaseAdapter._renderSingleTest renders verify expectations as a bullet l
 
 test('UseCaseAdapter._renderSingleTest includes the leading note before the test-card', () => {
   const adapter = new UseCaseAdapter();
-  const md = adapter._renderSingleTest(baseUsecase.spec.tests[0], baseUsecase, '_Some shared note._');
+  const md = adapter._renderSingleTest(
+    baseUsecase.spec.tests[0],
+    baseUsecase,
+    '_Some shared note._'
+  );
   expect(md.startsWith('_Some shared note._')).toBe(true);
   expect(md.indexOf('_Some shared note._')).toBeLessThan(md.indexOf('<div class="test-card">'));
 });
@@ -228,7 +242,9 @@ test('UseCaseAdapter._renderCleanupSteps targets the application manifest deleti
     spec: { requires: { applications: [{ name: 'bookinfo', clusters: [{ name: 'west' }] }] } },
   };
   const md = adapter._renderCleanupSteps(usecase, options);
-  expect(md).toContain('kubectl delete --context $WEST_CONTEXT --ignore-not-found=true -f - <<\'EOF\'');
+  expect(md).toContain(
+    "kubectl delete --context $WEST_CONTEXT --ignore-not-found=true -f - <<'EOF'"
+  );
 });
 
 test('UseCaseAdapter._renderCleanupSteps deletes just the namespace when the application pins one (matches UseCaseManager.cleanup)', () => {
@@ -263,12 +279,9 @@ test('UseCaseAdapter._renderCleanupSteps notes when a feature has no generated m
 
 test('UseCaseAdapter._renderRunStep falls back to yamlDump for unknown actions', () => {
   const adapter = new UseCaseAdapter();
-  const md = adapter._renderRunStep(
-    { action: 'mystery-action', foo: 'bar' },
-    {},
-    baseUsecase,
-    { sentRequestExplained: false }
-  );
+  const md = adapter._renderRunStep({ action: 'mystery-action', foo: 'bar' }, {}, baseUsecase, {
+    sentRequestExplained: false,
+  });
   expect(md).toContain('```yaml');
   expect(md).toContain('action: mystery-action');
   expect(md).toContain('foo: bar');
@@ -330,8 +343,16 @@ test('UseCaseAdapter.generate omits the common-cluster note when tests target di
     metadata: { name: 'mixed-clusters' },
     spec: {
       tests: [
-        { name: 'test-a', clusters: [{ name: 'east' }], steps: [{ action: 'wait', duration: 100 }] },
-        { name: 'test-b', clusters: [{ name: 'west' }], steps: [{ action: 'wait', duration: 100 }] },
+        {
+          name: 'test-a',
+          clusters: [{ name: 'east' }],
+          steps: [{ action: 'wait', duration: 100 }],
+        },
+        {
+          name: 'test-b',
+          clusters: [{ name: 'west' }],
+          steps: [{ action: 'wait', duration: 100 }],
+        },
       ],
     },
   };

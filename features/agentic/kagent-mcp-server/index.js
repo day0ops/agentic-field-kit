@@ -74,7 +74,10 @@ export class KagentMcpServerFeature extends Feature {
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
       await this.applyResource(this.buildMcpServer(), context);
-      this.log(`MCPServer '${this.serverName}' applied in namespace '${this.namespace}'`, 'success');
+      this.log(
+        `MCPServer '${this.serverName}' applied in namespace '${this.namespace}'`,
+        'success'
+      );
     }
   }
 

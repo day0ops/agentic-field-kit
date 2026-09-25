@@ -203,7 +203,11 @@ export class PiiGuardrailPolicyFeature extends Feature {
               processors: [
                 {
                   remote: {
-                    backendRef: { name: this.serverName, namespace: this.namespace, port: this.port },
+                    backendRef: {
+                      name: this.serverName,
+                      namespace: this.namespace,
+                      port: this.port,
+                    },
                     failureMode: this.failureMode,
                   },
                   methods: { 'tools/call': 'Response' },

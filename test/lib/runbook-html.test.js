@@ -128,7 +128,7 @@ test('HtmlRenderer.render wires up an IntersectionObserver-based scroll spy for 
   const html = new HtmlRenderer().render(SYNTHETIC_MARKDOWN, baseSelection);
   expect(html).toContain('new IntersectionObserver');
   expect(html).toContain('initScrollSpy()');
-  expect(html).toContain(".sidenav a.active { color: var(--accent)");
+  expect(html).toContain('.sidenav a.active { color: var(--accent)');
 });
 
 test('HtmlRenderer.render disables mermaid auto-init before DOMContentLoaded to avoid a render race', () => {
@@ -168,7 +168,10 @@ test('HtmlRenderer.render uses a friendly title (not the raw dashed name) in the
     ...baseSelection,
     usecases: [
       {
-        metadata: { name: 'hub-spoke-mcp-connectivity', description: 'Cross-cluster MCP tool access.' },
+        metadata: {
+          name: 'hub-spoke-mcp-connectivity',
+          description: 'Cross-cluster MCP tool access.',
+        },
         spec: {},
       },
     ],

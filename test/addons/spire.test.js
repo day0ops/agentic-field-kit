@@ -163,7 +163,9 @@ test('spire runbook generate targets the cluster it is installed on', async () =
 });
 
 test('spire runbook generate reads trustDomain/certMode/distinctRoots from a nested config block', async () => {
-  const addonCfg = { config: { trustDomain: 'east.local', certMode: 'self-signed', distinctRoots: true } };
+  const addonCfg = {
+    config: { trustDomain: 'east.local', certMode: 'self-signed', distinctRoots: true },
+  };
   const md = await spireRunbookGenerate(1, addonCfg, 'east', {}, { spec: {} });
   expect(md).toContain('trustDomain: east.local');
   expect(md).not.toContain('trustDomain: east\n');
@@ -171,14 +173,18 @@ test('spire runbook generate reads trustDomain/certMode/distinctRoots from a nes
 });
 
 test('spire runbook generate builds the distinctRoots bundle in own-root, istiod-root, peer-roots order (order-dependent live bug, not cosmetic)', async () => {
-  const addonCfg = { config: { trustDomain: 'east.local', certMode: 'self-signed', distinctRoots: true } };
+  const addonCfg = {
+    config: { trustDomain: 'east.local', certMode: 'self-signed', distinctRoots: true },
+  };
   const md = await spireRunbookGenerate(1, addonCfg, 'east', {}, { spec: {} });
   // own root first
   expect(md).toContain(
     'cat /tmp/spire-distinct-roots/east.local/root-cert.pem /tmp/spire-certs/east.local/istio-root.pem > /tmp/spire-certs/east.local/bundle.pem'
   );
   // then every OTHER trust domain's root appended, skipping its own (already included above)
-  expect(md).toContain('[ "$peer_root" = "/tmp/spire-distinct-roots/east.local/root-cert.pem" ] && continue');
+  expect(md).toContain(
+    '[ "$peer_root" = "/tmp/spire-distinct-roots/east.local/root-cert.pem" ] && continue'
+  );
 });
 
 test('spire runbook generate resolves a {{cluster.name}} template in trustDomain to the real cluster name', async () => {
@@ -190,8 +196,14 @@ test('spire runbook generate resolves a {{cluster.name}} template in trustDomain
 
 test('spire runbook generatePreamble resolves a {{cluster.name}} template in trustDomain per instance', async () => {
   const instances = [
-    { addon: { config: { trustDomain: '{{cluster.name}}.local', distinctRoots: true } }, clusterName: 'east' },
-    { addon: { config: { trustDomain: '{{cluster.name}}.local', distinctRoots: true } }, clusterName: 'west' },
+    {
+      addon: { config: { trustDomain: '{{cluster.name}}.local', distinctRoots: true } },
+      clusterName: 'east',
+    },
+    {
+      addon: { config: { trustDomain: '{{cluster.name}}.local', distinctRoots: true } },
+      clusterName: 'west',
+    },
   ];
   const preamble = await spireRunbookGeneratePreamble(instances, {});
   expect(preamble).toContain('east.local');
@@ -206,12 +218,14 @@ test('spire runbook generate uses the plain shared-root flow when distinctRoots/
   expect(md).not.toContain('SPIRE-only root');
 });
 
-test('spire runbook generate uses a dedicated shared root (not istiod\'s) when multiRoot is set without distinctRoots', async () => {
-  const addonCfg = { config: { trustDomain: 'east.local', certMode: 'self-signed', multiRoot: true } };
+test("spire runbook generate uses a dedicated shared root (not istiod's) when multiRoot is set without distinctRoots", async () => {
+  const addonCfg = {
+    config: { trustDomain: 'east.local', certMode: 'self-signed', multiRoot: true },
+  };
   const md = await spireRunbookGenerate(1, addonCfg, 'east', {}, { spec: {} });
   expect(md).toContain('/tmp/spire-shared-root');
   // federation happens inline (both directions), at first-mint time, not deferred to a later lab
-  expect(md).toContain("get secret cacerts -n istio-system");
+  expect(md).toContain('get secret cacerts -n istio-system');
   expect(md).toContain('patch secret cacerts -n istio-system --type=merge');
 });
 

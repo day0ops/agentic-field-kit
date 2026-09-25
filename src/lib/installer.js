@@ -399,8 +399,7 @@ export class InstallerManager {
 
     if (!profile) throw new Error('profile is required');
     if (!cluster) throw new Error('cluster is required');
-    if (!licenseKey)
-      throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
+    if (!licenseKey) throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
 
     const cfg = resolveConfig(profile, { ...options, licenseKey });
 
@@ -628,16 +627,11 @@ export class InstallerManager {
    * @param {string} [options.licenseKey]
    */
   static async installAll(options = {}) {
-    const {
-      profileName,
-      clusters,
-      licenseKey = process.env.ENTERPRISE_ISTIO_LICENSE,
-    } = options;
+    const { profileName, clusters, licenseKey = process.env.ENTERPRISE_ISTIO_LICENSE } = options;
 
     if (!profileName) throw new Error('profileName is required');
     if (!clusters || clusters.length === 0) throw new Error('At least one cluster is required');
-    if (!licenseKey)
-      throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
+    if (!licenseKey) throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
 
     for (const cluster of clusters) {
       const flag = contextFlags(cluster.context).kubectl;
