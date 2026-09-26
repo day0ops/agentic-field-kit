@@ -189,7 +189,7 @@ spec:
     # non-namespaced catalog, so the pod-provisioning entry and the
     # gateway-routing entry (Step 3, same physical server) can't share one
     # name. Resulting Service lands at
-    # <serverName>.kagent-system.svc.cluster.local:<port> (confirmed live) --
+    # <serverName>.kagent-system.svc.cluster.local:<port> --
     # Step 3's serviceName/serviceNamespace below point there.
     - name: agentregistry-mcp-server
       description: 'AgentRegistry: deploy order-db-mcp on the east kagent runtime'
@@ -809,8 +809,7 @@ spec:
         gatewayNamespace: agentgateway-proxy
         # Cross-cluster host -- refund-approval's kagent Runtime is on west; its
         # Service is marked global by the global-service step above (Step 4b), same
-        # pattern already proven live by loyalty-rewards-mcp's own cross-cluster
-        # Backend (Step 3c).
+        # pattern as loyalty-rewards-mcp's own cross-cluster Backend (Step 3c).
         agentServiceHost: retail-returns-refund-approval.kagent-system.mesh.internal
       clusters:
         - name: east

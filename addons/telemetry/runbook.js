@@ -47,7 +47,7 @@ export function envExportsFor(addonCfg, _profile, env) {
   ];
   if (cfg.mode !== 'agent') {
     const grafanaHostname =
-      tpl(cfg.grafanaHostname, env.spec.domains?.grafana) || 'grafana.example.com';
+      tpl(cfg.grafanaHostname, env.spec.domains?.core?.grafana) || 'grafana.example.com';
     exports.unshift(
       { name: 'GRAFANA_HOSTNAME', value: grafanaHostname, comment: 'Grafana public hostname' },
       {
@@ -107,7 +107,7 @@ async function _generateGateway(addonCfg, clusterName, env) {
   const storageSize = cfg.database?.storageSize || cfg.storageSize || '50Gi';
   const retention = cfg.retention || '120h';
   const grafanaHostname =
-    tpl(cfg.grafanaHostname, env.spec.domains?.grafana) || 'grafana.example.com';
+    tpl(cfg.grafanaHostname, env.spec.domains?.core?.grafana) || 'grafana.example.com';
   // Safe to reference the shell variable anywhere this is interpolated into an
   // unquoted heredoc or plain/double-quoted argument; the Grafana OIDC values block
   // below uses a *quoted* heredoc (`<<'EOF'`) so it must keep the literal instead.
@@ -221,10 +221,7 @@ EOF
       (grafanaOidc.issuerUrl?.split('/realms/')[1] || 'grafana')
         .replace(/\{\{[^}]+\}\}/g, '')
         .replace(/^\//, '') || 'grafana';
-    const keycloakHostname = '$KEYCLOAK_HOSTNAME';
-    const issuerUrl =
-      tpl(grafanaOidc.issuerUrl, null) ||
-      (grafanaOidc.issuerUrl || '').replace(/\{\{env\.domains\.keycloak\}\}/g, keycloakHostname);
+    const issuerUrl = resolveRunbookTemplates(grafanaOidc.issuerUrl, { env }) || '';
     const clientId = grafanaOidc.clientId || 'grafana';
     const clientSecret = grafanaOidc.clientSecret || 'grafana-client-secret';
     const adminGroup = grafanaOidc.adminGroup || 'grafana-admins';

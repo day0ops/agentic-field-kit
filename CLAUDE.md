@@ -62,6 +62,7 @@ export GRAFANA_ADMIN_PASSWORD=<password>     # Grafana admin login password
 ## Style
 
 - Don't soft-wrap `description` fields in usecase/feature/profile YAML — they don't render well on stdout.
+- Don't add comments to usecase/profile YAML narrating what worked or didn't work (e.g. "confirmed live", "UNVERIFIED", debugging history). Keep comments concise and lean - state the constraint or non-obvious behavior, not the investigation that led to it.
 
 ## Architecture
 

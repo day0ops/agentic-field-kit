@@ -960,7 +960,7 @@ runbookCmd.addCommand(
   new Command('generate')
     .description('Interactively generate a setup runbook from a profile')
     .option('--output <dir>', 'Output directory', 'docs/runbooks')
-    .option('--filename <name>', 'Output filename (without .md extension)')
+    .option('--filename <name>', 'Output filename (without file extension)')
     .addOption(
       new Option('--format <fmt>', 'Output format').choices(['md', 'html', 'both']).default('md')
     )

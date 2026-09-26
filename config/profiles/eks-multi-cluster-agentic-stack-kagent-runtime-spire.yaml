@@ -233,7 +233,7 @@ spec:
                       # The UI's own logout flow (AuthOidcContext.tsx) always redirects to
                       # `${origin}/logout`, not the bare origin -- Keycloak's post-logout-redirect
                       # match is exact, so registering only the bare origin here rejects every
-                      # real logout with "Invalid redirect uri" (confirmed live).
+                      # real logout with "Invalid redirect uri".
                       postLogoutRedirectUris:
                         - 'https://{{env.domains.core.agentregistryUi}}/logout'
                   users:
@@ -296,7 +296,7 @@ spec:
                       # solo-enterprise-ui's logout flow (AuthOidcContext.tsx) always redirects to
                       # `${origin}/logout`, not the bare origin -- Keycloak's post-logout-redirect
                       # match is exact, so a bare origin here rejects every real logout with
-                      # "Invalid redirect uri" (confirmed live, same root cause as ar-ui above).
+                      # "Invalid redirect uri" (same root cause as ar-ui above).
                       postLogoutRedirectUris:
                         - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/logout'
                         - 'https://{{env.domains.core.agentgatewayUi}}/logout'
@@ -361,9 +361,8 @@ spec:
                       # downstream RFC 8693 exchange (below) authenticates as this client
                       # too, and Keycloak's standard token exchange only permits a client
                       # to exchange tokens it issued itself ("self-exchange") without extra
-                      # fine-grained cross-client permissions. A separate gate-only client
-                      # was tried first and its tokens got a live 403 Forbidden on exchange
-                      # for exactly this reason.
+                      # fine-grained cross-client permissions. A separate gate-only client's
+                      # tokens would get rejected on exchange for exactly this reason.
                       flows:
                         - direct-access
                         - authorization-code
@@ -394,7 +393,7 @@ spec:
                       # own ROPC login) -- Keycloak 26.2+ requires this attribute
                       # explicitly enabled per-client or the exchange endpoint rejects
                       # with "Standard token exchange is not enabled for the requested
-                      # client", confirmed live against the deployed realm.
+                      # client".
                       clientAttributes:
                         standard.token.exchange.enabled: 'true'
                   users:
@@ -459,8 +458,7 @@ spec:
                       # Keycloak defaults consentRequired to false (login redirects straight
                       # back with the code, no explicit grant screen) -- this client stands in
                       # for a real carrier's OAuth provider, so it needs a real "Do you want to
-                      # grant access?" consent step to actually demonstrate one (confirmed live
-                      # 2026-09-13: without this, Stage 9's popup showed no consent screen).
+                      # grant access?" consent step to actually demonstrate one.
                       consentRequired: true
                       redirectUris:
                         - 'https://{{env.domains.app.retailReturns}}/api/stage9/callback'
@@ -487,20 +485,17 @@ spec:
                       clientAttributes:
                         standard.token.exchange.enabled: 'true'
                   # UNVERIFIED end to end: registers Entra as a broker so Keycloak can
-                  # validate an Entra-issued token's signature/issuer, but whether
-                  # agentgateway's runtime exchange call actually resolves through
-                  # Keycloak's external-token-exchange path (distinct from the
-                  # same-client self-exchange already proven live via
-                  # retail-returns-customers above) hasn't been confirmed against a real
-                  # Entra tenant yet -- see docs/entra-tenant-setup.md.
+                  # validate an Entra-issued token's signature/issuer. Whether agentgateway's
+                  # runtime exchange call resolves through Keycloak's external-token-exchange
+                  # path is unconfirmed -- see docs/entra-tenant-setup.md.
                   identityProviders:
                     - alias: entra
                       displayName: Microsoft Entra ID
                       # Reuses agent-gateway's own Entra app registration (see
                       # docs/entra-tenant-setup.md 4b) rather than a dedicated broker-only
                       # registration -- fewer app registrations to manage. Revisit if
-                      # Keycloak's external token exchange turns out to need its own
-                      # redirect URI or app registration once tested live.
+                      # Keycloak's external token exchange needs its own redirect URI
+                      # or app registration.
                       clientId: '{{env.entra.sreIRS.agentGatewayClientId}}'
                       clientSecretEnvVar: ENTRA_GATEWAY_CLIENT_SECRET
                       authorizationUrl: 'https://login.microsoftonline.com/{{env.entra.sreIRS.tenantId}}/oauth2/v2.0/authorize'
@@ -518,10 +513,9 @@ spec:
                       # Must be a DEFAULT (not optional) client scope: gateway-exchange's token
                       # exchange call never sends an explicit scope param, and Keycloak only
                       # returns default-included scopes as candidates when the scope param is
-                      # null -- confirmed live (2026-09-09) that without this, the executor's
-                      # restrictedScopes output has no matching resource to attach to and the
-                      # exchanged token's scope silently comes back empty regardless of the
-                      # assertion's roles.
+                      # null. Without this, the executor's restrictedScopes output has no
+                      # matching resource to attach to and the exchanged token's scope comes
+                      # back empty regardless of the assertion's roles.
                       clientScopes:
                         - deployment.history.read
                       assignScopesToClientId: gateway-exchange
@@ -556,9 +550,8 @@ spec:
 
           # agentgateway must install before solo-ui: solo-ui's productAliases
           # (below) apply EnterpriseAgentgatewayPolicy resources, a CRD only
-          # agentgateway's own install brings onto the cluster. Confirmed live
-          # (2026-09-03): "no matches for kind EnterpriseAgentgatewayPolicy"
-          # when solo-ui ran first.
+          # agentgateway's own install brings onto the cluster. Installing solo-ui
+          # first fails with "no matches for kind EnterpriseAgentgatewayPolicy".
           - name: agentgateway
             description: AI Gateway Enterprise hub
             phase: post
@@ -576,22 +569,17 @@ spec:
               # JWT already used everywhere else in the demo (retail-returns-customers).
               tokenExchange:
                 enabled: true
-                # Must be reachable from in-cluster callers (e.g. kagent agents' own STS
-                # exchange calls) at this exact scheme+host, since agentgateway echoes it
-                # verbatim into its own .well-known/openid-configuration token_endpoint --
-                # confirmed live (twice): /oauth2/token is served by this controller itself
-                # (same port that serves .well-known, matching STS_WELL_KNOWN_URI's host:port
-                # on the agent side), NOT by the hub-agentgateway-proxy data-plane Gateway --
-                # pointing this at hub-agentgateway-proxy (with or without a real TLS
-                # listener there) produced an advertised token_endpoint that gets a clean
-                # 404 "route not found", since that Gateway never had this route at all.
+                # Must point at the controller service, not the hub-agentgateway-proxy
+                # data-plane Gateway: agentgateway echoes this verbatim into its own
+                # .well-known/openid-configuration token_endpoint, and /oauth2/token is
+                # served by the controller itself (same port as .well-known), not the Gateway.
                 issuer: 'http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777'
                 jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/retail-returns-customers'
                 # solo-ui's ui-backend forwards the browser's own session JWT (kagent realm,
                 # see solo-ui's oidc.issuerUrl below) when proxying
                 # /api/proxy/cluster/<cluster>/gg/* (e.g. Stage 9's elicitation list in agw-ui)
                 # to this same STS's /elicitations endpoint -- apiValidators must trust that
-                # realm too, or the UI gets a real 401 (confirmed live 2026-09-13).
+                # realm too, or the UI gets a 401.
                 additionalApiValidatorIssuers:
                   - '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
               gateway:
@@ -613,13 +601,12 @@ spec:
                 allowedRoutes:
                   namespaces:
                     from: All
-                # Explicit, additional listener for this Service's own in-cluster DNS name --
-                # confirmed live: retail-returns agents calling the public hostname from
-                # inside the cluster hairpin through the external LB and reliably take ~4.5
-                # minutes to connect or time out. This adds a second, specific listener (not
-                # a wildcard/match-any-host) so those same in-cluster callers can reach this
-                # Gateway directly instead, without loosening the primary listener's own
-                # Host-header restriction.
+                # Explicit, additional listener for this Service's own in-cluster DNS name:
+                # retail-returns agents calling the public hostname from inside the cluster
+                # hairpin through the external LB and take ~4.5 minutes to connect or time
+                # out. This adds a second, specific listener (not a wildcard/match-any-host)
+                # so in-cluster callers can reach this Gateway directly, without loosening
+                # the primary listener's own Host-header restriction.
                 additionalHostnames:
                   - hub-agentgateway-proxy.agentgateway-proxy.svc.cluster.local
                 # Real cert-manager-issued TLS listener alongside the plain HTTP one above --
@@ -715,9 +702,8 @@ spec:
                 clientId: agentregistry
                 clientSecret: agentregistry-secret
               # Required to register west's kagent controller as a remote Runtime: this
-              # namespace's own pods need ambient membership to resolve/reach a
-              # *.mesh.internal cross-cluster hostname at all (confirmed live: NXDOMAIN
-              # from a non-ambient namespace vs. a real answer from an ambient one).
+              # namespace's own pods need ambient membership to resolve a *.mesh.internal
+              # cross-cluster hostname at all (NXDOMAIN otherwise).
               ambient: true
               # No agentcore block: agents run on the in-cluster kagent runtime instead of
               # AWS Bedrock AgentCore, so there's no IAM/CloudFormation/arctl Runtime setup
@@ -759,11 +745,11 @@ spec:
                 - east
                 - west
               # A kagent-created waypoint (e.g. fronting refund-approval, Stage 11a/11b's
-              # AccessPolicy) only trusts its own cluster's SPIFFE trust domain by default,
-              # rejecting a cross-cluster caller's mTLS identity even though the underlying
-              # cert chain validates fine -- confirmed live (agentgateway-enterprise's own
-              # TrustDomainVerifier). Needed on both clusters since either could call into
-              # the other's waypoint-fronted agents.
+              # AccessPolicy) only trusts its own cluster's SPIFFE trust domain by default
+              # (agentgateway-enterprise's TrustDomainVerifier), rejecting a cross-cluster
+              # caller's mTLS identity even though the underlying cert chain validates fine.
+              # Needed on both clusters since either could call into the other's
+              # waypoint-fronted agents.
               waypointTrustDomain:
                 skipValidate: true
 
