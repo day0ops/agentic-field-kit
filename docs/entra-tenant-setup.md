@@ -95,7 +95,7 @@ If prompted toward Entitlement Management / Access Packages (a Governed Workforc
 ## 5. Role assignments (Enterprise Applications -> each app -> Users and groups -> Add user/group)
 
 | App             | alice                                  | bob                                                |
-| --------------- | --------------------------------------- | --------------------------------------------------- |
+| --------------- | -------------------------------------- | -------------------------------------------------- |
 | `agent-gateway` | Assign (default access)                | Assign (default access) - both can log in and read |
 | `repo-mcp`      | Assign, role = **Deployment Rollback** | Do not assign at all                               |
 
