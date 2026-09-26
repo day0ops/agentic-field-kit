@@ -6,7 +6,7 @@ import { dump as yamlDump } from 'js-yaml';
 import { AgentgatewayBackendFeature } from '../../../features/traffic-management/agentgateway-backend/index.js';
 import { IngressHttpRouteFeature } from '../../../features/traffic-management/ingress-httproute/index.js';
 import { UseCaseTestRunner } from '../usecase-tests.js';
-import { resolveRunbookTemplates } from './template-vars.js';
+import { resolveRunbookTemplates, resolveRunbookTemplatesLiteral } from './template-vars.js';
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -37,8 +37,10 @@ export class UseCaseAdapter {
 
       const sections = [`#### Deploy\n\n${this._renderDeploy(usecase, options)}`];
 
+      // Literal, never a "$VAR" reference -- a send-request step's body is embedded in a
+      // single-quoted `-d '...'` shell arg below, where the shell never expands one.
       const tests = (usecase.spec?.tests || []).map(t =>
-        resolveRunbookTemplates(t, { env: options.env })
+        resolveRunbookTemplatesLiteral(t, { env: options.env })
       );
       const commonNote = _commonClusterNote(tests);
       tests.forEach((test, i) => {
@@ -76,7 +78,11 @@ export class UseCaseAdapter {
         const appPath = join(PROJECT_ROOT, 'extras', 'applications', app.name, `${app.name}.yaml`);
         let appYaml;
         try {
-          appYaml = readFileSync(appPath, 'utf8').trim();
+          // Embedded in a single-quoted heredoc below (<<'EOF') -- resolve to real values,
+          // never a "$VAR" reference, since the shell won't expand one there.
+          appYaml = resolveRunbookTemplatesLiteral(readFileSync(appPath, 'utf8').trim(), {
+            env: options.env,
+          });
         } catch {
           appYaml = `# ${app.name} manifest not found at ${appPath}`;
         }
@@ -446,7 +452,11 @@ export class UseCaseAdapter {
         const appPath = join(PROJECT_ROOT, 'extras', 'applications', app.name, `${app.name}.yaml`);
         let appYaml;
         try {
-          appYaml = readFileSync(appPath, 'utf8').trim();
+          // Embedded in a single-quoted heredoc below (<<'EOF') -- resolve to real values,
+          // never a "$VAR" reference, since the shell won't expand one there.
+          appYaml = resolveRunbookTemplatesLiteral(readFileSync(appPath, 'utf8').trim(), {
+            env: options.env,
+          });
         } catch {
           appYaml = `# ${app.name} manifest not found at ${appPath}`;
         }

@@ -1,4 +1,5 @@
 // addons/agentregistry/runbook.js
+import { resolveRunbookTemplates } from '../../src/lib/runbook-adapters/template-vars.js';
 
 // tpl: return v if it's a real value (not an unresolved {{...}} template), otherwise fb
 const tpl = (v, fb) => (v && !/\{\{/.test(v) ? v : fb);
@@ -21,8 +22,8 @@ export function envVarsFor(_addonCfg, _clusterName) {
 export function envExportsFor(addonCfg, _profile, env) {
   const cfg = addonCfg.config || {};
   const hostname =
-    tpl(cfg.hostname, env.spec.domains?.agentregistry) || 'agentregistry.example.com';
-  const version = addonCfg.version || ENTERPRISE_VERSION;
+    tpl(cfg.hostname, env.spec.domains?.core?.agentregistryUi) || 'agentregistry.example.com';
+  const version = resolveRunbookTemplates(addonCfg.version, { env }) || ENTERPRISE_VERSION;
   const chartOci = addonCfg.chartOci || DEFAULT_CHART_OCI;
   return [
     { name: 'AGENTREGISTRY_VERSION', value: version, comment: 'Agentregistry Enterprise version' },
@@ -44,10 +45,10 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   const cfg = addonCfg.config || {};
   const ns = addonCfg.namespace || 'agentregistry-system';
   const hostname =
-    tpl(cfg.hostname, env.spec.domains?.agentregistry) || 'agentregistry.example.com';
+    tpl(cfg.hostname, env.spec.domains?.core?.agentregistryUi) || 'agentregistry.example.com';
   const oidc = cfg.oidc || {};
   const keycloakHostname =
-    tpl(oidc.keycloakHostname, env.spec.domains?.keycloak) || 'keycloak.example.com';
+    tpl(oidc.keycloakHostname, env.spec.domains?.core?.keycloak) || 'keycloak.example.com';
   const keycloakScheme = oidc.keycloakTlsEnabled ? 'https' : 'http';
   const realm = oidc.realm || 'agentregistry';
   const oidcIssuer = `${keycloakScheme}://${keycloakHostname}/realms/${realm}`;

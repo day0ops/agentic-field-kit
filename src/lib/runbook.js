@@ -128,7 +128,7 @@ export class RunbookPicker {
       {
         type: 'input',
         name: 'filename',
-        message: 'Filename (without .md):',
+        message: 'Filename (without file extension):',
         default: defaultFilename,
       },
     ]);

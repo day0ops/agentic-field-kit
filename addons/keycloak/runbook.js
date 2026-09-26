@@ -2,6 +2,7 @@
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { resolveRunbookTemplates } from '../../src/lib/runbook-adapters/template-vars.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -133,7 +134,7 @@ function _fillYaml(s, values) {
 
 export function envExportsFor(addonCfg, _profile, env) {
   const cfg = addonCfg.config || {};
-  const hostname = tpl(cfg.hostname, env.spec.domains?.keycloak) || 'keycloak.example.com';
+  const hostname = tpl(cfg.hostname, env.spec.domains?.core?.keycloak) || 'keycloak.example.com';
   const keycloakVersion =
     addonCfg.version ||
     addonCfg.keycloakVersion ||
@@ -276,12 +277,17 @@ kubectl wait certificate/${tlsSecretName} -n ${ns} \\
     const identityProviders = realm.identityProviders || [];
 
     const idpLines = identityProviders
-      .map(
-        idp => `      curl -s -X POST "$KEYCLOAK_URL/admin/realms/${realm.realm}/identity-provider/instances" \\
+      .map(idp => {
+        const clientId = resolveRunbookTemplates(idp.clientId, { env });
+        const authorizationUrl = resolveRunbookTemplates(idp.authorizationUrl, { env });
+        const tokenUrl = resolveRunbookTemplates(idp.tokenUrl, { env });
+        const jwksUrl = resolveRunbookTemplates(idp.jwksUrl, { env });
+        const issuer = resolveRunbookTemplates(idp.issuer, { env });
+        return `      curl -s -X POST "$KEYCLOAK_URL/admin/realms/${realm.realm}/identity-provider/instances" \\
         -H "Authorization: Bearer $ACCESS_TOKEN" \\
         -H "Content-Type: application/json" \\
-        -d '{"alias":"${idp.alias}","displayName":"${idp.displayName || idp.alias}","providerId":"oidc","enabled":true,"trustEmail":true,"config":{"clientId":"${idp.clientId}","clientSecret":"'"$${idp.clientSecretEnvVar}"'","authorizationUrl":"${idp.authorizationUrl}","tokenUrl":"${idp.tokenUrl}","jwksUrl":"${idp.jwksUrl}","issuer":"${idp.issuer}","useJwksUrl":"true","validateSignature":"true","clientAuthMethod":"client_secret_post","syncMode":"IMPORT","defaultScope":"${idp.defaultScope || 'openid profile email'}"}}'`
-      )
+        -d '{"alias":"${idp.alias}","displayName":"${idp.displayName || idp.alias}","providerId":"oidc","enabled":true,"trustEmail":true,"config":{"clientId":"${clientId}","clientSecret":"'"$${idp.clientSecretEnvVar}"'","authorizationUrl":"${authorizationUrl}","tokenUrl":"${tokenUrl}","jwksUrl":"${jwksUrl}","issuer":"${issuer}","useJwksUrl":"true","validateSignature":"true","clientAuthMethod":"client_secret_post","syncMode":"IMPORT","defaultScope":"${idp.defaultScope || 'openid profile email'}"}}'`;
+      })
       .join('\n\n');
 
     const groupLines = groups
@@ -393,7 +399,7 @@ ${userLines}`
   let soloUiSection = '';
   if (soloUiClients?.enabled) {
     const suiRealm = soloUiClients.realm || 'solo-ui';
-    const suiHostname = tpl(soloUiClients.hostname, env.spec.domains?.soloUi) || '';
+    const suiHostname = tpl(soloUiClients.hostname, env.spec.domains?.core?.soloUi) || '';
     const suiPassword = '$SOLO_UI_DEFAULT_PASSWORD';
     const suiUsers = ['solo-admin', 'solo-reader', 'solo-writer'];
     const suiUserLines = suiUsers

@@ -370,9 +370,8 @@ spec:
 
           # agentgateway must install before solo-ui: solo-ui's productAliases
           # (below) apply EnterpriseAgentgatewayPolicy resources, a CRD only
-          # agentgateway's own install brings onto the cluster. Confirmed live
-          # (2026-09-03): "no matches for kind EnterpriseAgentgatewayPolicy"
-          # when solo-ui ran first.
+          # agentgateway's own install brings onto the cluster. Installing solo-ui
+          # first fails with "no matches for kind EnterpriseAgentgatewayPolicy".
           - name: agentgateway
             description: AI Gateway Enterprise hub
             phase: post

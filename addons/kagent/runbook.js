@@ -1,4 +1,5 @@
 // addons/kagent/runbook.js
+import { resolveRunbookTemplates } from '../../src/lib/runbook-adapters/template-vars.js';
 
 // tpl: return v if it's a real value (not an unresolved {{...}} template), otherwise fb
 const tpl = (v, fb) => (v && !/\{\{/.test(v) ? v : fb);
@@ -27,9 +28,11 @@ export function envVarsFor(addonCfg, _clusterName) {
   return vars;
 }
 
-export function envExportsFor(addonCfg, _profile, _env) {
+export function envExportsFor(addonCfg, _profile, env) {
   const enterprise = (addonCfg.config || {}).enterprise === true;
-  const version = addonCfg.version || (enterprise ? ENTERPRISE_VERSION : OSS_VERSION);
+  const version =
+    resolveRunbookTemplates(addonCfg.version, { env }) ||
+    (enterprise ? ENTERPRISE_VERSION : OSS_VERSION);
   return [
     {
       name: 'KAGENT_VERSION',
@@ -51,7 +54,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
 
   const oidc = cfg.oidc || {};
   const keycloakHostname =
-    tpl(oidc.keycloakHostname, env.spec.domains?.keycloak) || 'keycloak.example.com';
+    tpl(oidc.keycloakHostname, env.spec.domains?.core?.keycloak) || 'keycloak.example.com';
   const keycloakScheme = oidc.keycloakTlsEnabled ? 'https' : 'http';
   const realm = oidc.realm || 'kagent';
   const oidcIssuer = oidc.issuer || `${keycloakScheme}://${keycloakHostname}/realms/${realm}`;
@@ -62,7 +65,8 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   const providerType = provider.type || 'openAI';
   const otel = cfg.otel || {};
   let otlpEndpoint =
-    tpl(otel.endpoint, null) || 'opentelemetry-collector-traces.telemetry.svc.cluster.local:4317';
+    resolveRunbookTemplates(otel.endpoint, { env }) ||
+    'opentelemetry-collector-traces.telemetry.svc.cluster.local:4317';
   if (!/^https?:\/\//.test(otlpEndpoint)) {
     otlpEndpoint = `http://${otlpEndpoint}`;
   }

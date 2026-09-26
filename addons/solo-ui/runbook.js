@@ -27,8 +27,8 @@ export function envExportsFor(addonCfg, _profile, env) {
   const addon = addonSettings(addonCfg);
   const mode = addon.mode || 'management';
   if (mode === 'relay') return [];
-  const hostname = tpl(addon.hostname, env.spec.domains?.soloUi) || 'soloui.example.com';
-  const version = addon.version || '0.4.3';
+  const hostname = tpl(addon.hostname, env.spec.domains?.core?.soloUi) || 'soloui.example.com';
+  const version = resolveRunbookTemplates(addon.version, { env }) || '0.4.3';
   return [
     { name: 'SOLO_UI_VERSION', value: version, comment: 'Solo UI chart version' },
     { name: 'SOLO_UI_HOSTNAME', value: hostname, comment: 'Solo UI public hostname' },
@@ -46,7 +46,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   return _generateManagement(addonCfg, clusterName, env);
 }
 
-function _generateManagement(addonCfg, clusterName, _env) {
+function _generateManagement(addonCfg, clusterName, env) {
   const addon = addonSettings(addonCfg);
   const ns = addon.namespace || 'solo-enterprise';
   const hostname = tpl(addon.hostname, null) || '$SOLO_UI_HOSTNAME';
@@ -57,10 +57,7 @@ function _generateManagement(addonCfg, clusterName, _env) {
   const telNs = addon.telemetryNamespace || 'telemetry';
   const tls = addon.tls || {};
 
-  const keycloakHostname = '$KEYCLOAK_HOSTNAME';
-  const oidcIssuerUrl =
-    tpl(oidc.issuerUrl, null) ||
-    (oidc.issuerUrl || '').replace(/\{\{env\.domains\.keycloak\}\}/g, keycloakHostname);
+  const oidcIssuerUrl = resolveRunbookTemplates(oidc.issuerUrl, { env }) || '';
 
   // OCI chart URLs — no helm repo add needed
   const crdsChartOci =
@@ -234,7 +231,8 @@ EOF
 `
         : '';
     const aliasCmds = productAliases
-      .map(({ product, hostname: aliasHostname }) => {
+      .map(({ product, hostname: rawHostname }) => {
+        const aliasHostname = resolveRunbookTemplates(rawHostname, { env }) || rawHostname;
         const prefix = PRODUCT_PATH_PREFIXES[product] || product;
         const secretName = `${product}-ui-tls`;
         return `# ${product}: https://${aliasHostname} -> /${prefix}

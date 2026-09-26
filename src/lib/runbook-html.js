@@ -218,6 +218,56 @@ ${htmlChunks.join('\n')}
     });
   }
 
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // A bash code block is tagged language-bash even when most of it is a heredoc'd
+  // Kubernetes manifest (kubectl apply -f - <<EOF ... EOF) -- hljs's bash grammar doesn't
+  // parse YAML/JSON, so those bodies rendered almost unhighlighted next to fully-colored
+  // shell commands. Detect heredoc bodies and highlight each with its own language,
+  // keeping the surrounding shell command under the bash grammar.
+  function sniffHeredocLang(body) {
+    const trimmed = body.trim();
+    if (!trimmed) return null;
+    if (/^[{[]/.test(trimmed)) return 'json';
+    if (/^[A-Za-z_][\\w.-]*:(\\s|$)/m.test(trimmed)) return 'yaml';
+    return null;
+  }
+
+  function highlightHeredocAwareBlock(block) {
+    const raw = block.textContent;
+    const heredocRe = /(<<-?['"]?(\\w+)['"]?)\\n([\\s\\S]*?)\\n\\2(?=\\r?\\n|$)/g;
+    let last = 0;
+    let out = '';
+    let match;
+    let matched = false;
+    while ((match = heredocRe.exec(raw))) {
+      matched = true;
+      const [full, opener, delim, body] = match;
+      const bashHead = raw.slice(last, match.index) + opener + '\\n';
+      out += hljs.highlight(bashHead, { language: 'bash' }).value;
+      const lang = sniffHeredocLang(body);
+      out += lang
+        ? '<span class="heredoc-body">' + hljs.highlight(body, { language: lang }).value + '</span>'
+        : escapeHtml(body);
+      out += '\\n' + escapeHtml(delim);
+      last = match.index + full.length;
+    }
+    if (!matched) return false;
+    out += hljs.highlight(raw.slice(last), { language: 'bash' }).value;
+    block.innerHTML = out;
+    block.classList.add('hljs');
+    return true;
+  }
+
+  function highlightCodeBlocks() {
+    document.querySelectorAll('pre code').forEach((block) => {
+      if (block.classList.contains('language-bash') && highlightHeredocAwareBlock(block)) return;
+      hljs.highlightElement(block);
+    });
+  }
+
   function initCopyButtons() {
     document.querySelectorAll('pre').forEach((pre) => {
       if (pre.classList.contains('mermaid')) return;
@@ -268,7 +318,7 @@ ${htmlChunks.join('\n')}
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
-    hljs.highlightAll();
+    highlightCodeBlocks();
     highlightKeyTerms();
     initCopyButtons();
     if (document.fonts && document.fonts.ready) {
@@ -638,6 +688,12 @@ pre.mermaid {
   cursor: pointer;
 }
 .copy-btn:hover { background: #2a2a34; }
+
+/* github-dark maps keys/literals/numbers/variables to the same blue -- give heredoc-embedded
+   YAML/JSON (see highlightHeredocAwareBlock) a more differentiated palette. */
+.heredoc-body .hljs-attr { color: #7ee787; }
+.heredoc-body .hljs-literal,
+.heredoc-body .hljs-number { color: #ffa657; }
 
 /* Code block backgrounds are always dark (see --code-bg), regardless of page theme. */
 mark.key-term {

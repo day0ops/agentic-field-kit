@@ -1,4 +1,8 @@
 // addons/agentgateway/runbook.js
+import {
+  resolveRunbookTemplates,
+  resolveRunbookTemplatesLiteral,
+} from '../../src/lib/runbook-adapters/template-vars.js';
 
 // tpl: return v if it's a real value (not an unresolved {{...}} template), otherwise fb
 const tpl = (v, fb) => (v && !/\{\{/.test(v) ? v : fb);
@@ -17,7 +21,7 @@ export function envVarsFor(addonCfg, _clusterName) {
 
 export function envExportsFor(addonCfg, _profile, env) {
   const cfg = addonCfg.config || {};
-  const version = addonCfg.version || 'v2026.5.1';
+  const version = resolveRunbookTemplates(addonCfg.version, { env }) || 'v2026.5.1';
   const exports = [
     { name: 'AGENTGATEWAY_VERSION', value: version, comment: 'Agentgateway Enterprise version' },
     {
@@ -29,7 +33,7 @@ export function envExportsFor(addonCfg, _profile, env) {
   // Hub only: expose the public hostname for the Gateway address
   const isSpoke = cfg.globalGateway === true;
   if (!isSpoke && cfg.gateway?.hostname) {
-    const hostname = tpl(cfg.gateway.hostname, env.spec.domains?.app) || '';
+    const hostname = tpl(cfg.gateway.hostname, env.spec.domains?.app?.main) || '';
     if (hostname) {
       exports.push({
         name: 'AGENTGATEWAY_HOSTNAME',
@@ -41,7 +45,7 @@ export function envExportsFor(addonCfg, _profile, env) {
   return exports;
 }
 
-export async function generate(_subIndex, addonCfg, clusterName, profile, _env) {
+export async function generate(_subIndex, addonCfg, clusterName, profile, env) {
   const cfg = addonCfg.config || {};
   const ns = addonCfg.namespace || 'agentgateway-system';
   const ctx = `$${clusterName.toUpperCase()}_CONTEXT`;
@@ -135,10 +139,16 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
           remoteConfig: { url: `${issuer}${jwksPath}` },
           issuer,
         });
-        const subjectValidators = JSON.stringify([validatorFor(tokenExchange.jwtIssuer)]);
+        // Embedded below in a single-quoted --set-json '...' helm arg -- resolve to real
+        // values, never a "$VAR" reference, since the shell won't expand one there.
+        const jwtIssuer = resolveRunbookTemplatesLiteral(tokenExchange.jwtIssuer, { env });
+        const additionalApiValidatorIssuers = (
+          tokenExchange.additionalApiValidatorIssuers || []
+        ).map(issuer => resolveRunbookTemplatesLiteral(issuer, { env }));
+        const subjectValidators = JSON.stringify([validatorFor(jwtIssuer)]);
         const apiValidators = JSON.stringify([
-          validatorFor(tokenExchange.jwtIssuer),
-          ...(tokenExchange.additionalApiValidatorIssuers || []).map(validatorFor),
+          validatorFor(jwtIssuer),
+          ...additionalApiValidatorIssuers.map(validatorFor),
         ]);
         const actorValidators = JSON.stringify([{ validatorType: 'k8s' }]);
         return [

@@ -1,7 +1,7 @@
 apiVersion: agentic.demo/v1
 kind: UseCase
 metadata:
-  name: hub-spoke-mcp-connectivity
+  name: hub-spoke-mcp-routing
   description: |
     Cross-cluster MCP tool access through a hub-spoke agentgateway topology.
 

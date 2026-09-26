@@ -119,7 +119,7 @@ test('HtmlRenderer.render wires up key-term highlighting for code blocks with a 
   expect(html).toContain('EnterpriseAgentgatewayBackend');
   expect(html).toContain('mark.key-term');
   const highlightCallIdx = html.indexOf('highlightKeyTerms();');
-  const hljsCallIdx = html.indexOf('hljs.highlightAll();');
+  const hljsCallIdx = html.indexOf('highlightCodeBlocks();');
   expect(hljsCallIdx).toBeGreaterThan(-1);
   expect(hljsCallIdx).toBeLessThan(highlightCallIdx);
 });

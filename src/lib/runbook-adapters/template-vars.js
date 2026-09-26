@@ -32,6 +32,18 @@ export function resolveRunbookTemplates(obj, { env, clusterName } = {}) {
   return TemplateResolver.resolveValues(obj, context);
 }
 
+/**
+ * Same as resolveRunbookTemplates, but always resolves to the real configured value --
+ * never a "$VAR" reference. Use this for content embedded in a single-quoted heredoc
+ * (e.g. `<<'EOF'`), where the shell never expands `$VAR`, so a reference would be baked
+ * in literally instead of substituting the real value.
+ */
+export function resolveRunbookTemplatesLiteral(obj, { env, clusterName } = {}) {
+  if (!obj) return obj;
+  const context = TemplateResolver.buildContext({ name: clusterName || '' }, env);
+  return TemplateResolver.resolveValues(obj, context);
+}
+
 // Force each known path to its "$VAR" reference, creating intermediate objects as needed —
 // applies regardless of whether the loaded environment actually has that section, so the
 // override always wins over a real value.
