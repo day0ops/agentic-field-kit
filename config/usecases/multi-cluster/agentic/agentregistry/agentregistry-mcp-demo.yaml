@@ -44,6 +44,7 @@ spec:
         routeName: agentregistry-delegate
         pathPrefix: /registry
         arctl:
+          version: 'v{{env.agentregistry.version}}'
           registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
           keycloakHostname: '{{env.domains.core.keycloak}}'
           keycloakTlsEnabled: true
@@ -66,6 +67,7 @@ spec:
         runtimeName: mcp-gateway
         pathSuffix: /currency-server
         arctl:
+          version: 'v{{env.agentregistry.version}}'
           registryUrl: '{{env.agentregistry.scheme}}://{{env.domains.core.agentregistryUi}}'
           keycloakHostname: '{{env.domains.core.keycloak}}'
           keycloakTlsEnabled: true

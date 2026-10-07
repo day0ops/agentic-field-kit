@@ -1,0 +1,38 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: gke-single-cluster-substrate
+  description: GKE single cluster for kagent Agent Substrate
+
+spec:
+  provider: gke
+  region: australia-southeast1
+  environment: google-dev
+
+  settings:
+    kubernetes_version: '1.37'
+    release_channel: RAPID
+    enable_beta_apis:
+      - certificates.k8s.io/v1beta1/clustertrustbundles
+      - certificates.k8s.io/v1beta1/podcertificaterequests
+    enable_workload_identity: true
+    # Generic bucket + Workload Identity binding; bound here to the atelet worker's and
+    # ate-api-server's KSAs so Agent Substrate can use it for actor snapshots. ate-api-server
+    # needs its own binding too -- it manages golden-snapshot Tags directly in the bucket;
+    # without it, golden actors suspend and snapshot fine but their Agent never reaches Ready.
+    enable_workload_storage: true
+    workload_storage_ksa_namespace: ate-system
+    workload_storage_ksa_name:
+      - atelet
+      - ate-api-server
+    # Required for any pool running Substrate workers: auto-upgrade forwards SIGTERM into
+    # actor containers on Google's own maintenance schedule.
+    node_auto_upgrade: false
+
+    nodes:
+      desired: 2
+      type: n1-standard-8
+
+  clusters:
+    - name: demo
+      role: workload

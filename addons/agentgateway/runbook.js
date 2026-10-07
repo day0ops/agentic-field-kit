@@ -58,7 +58,8 @@ export async function generate(_subIndex, addonCfg, clusterName, profile, env) {
   const gwPort = gateway.port || 80;
   const gwProtocol = gateway.protocol || 'HTTP';
   const gwFrom = gateway.allowedRoutes?.namespaces?.from || 'All';
-  const gatewayApiVersion = profile.spec.mesh?.gatewayApiVersion || 'v1.4.0';
+  const gatewayApiVersion =
+    cfg.gatewayApiVersion || profile.spec?.gatewayApiVersion || 'v1.4.0';
   const soloUiNs = cfg.soloUiNamespace || '';
   const gwServiceType = gateway.serviceType || null;
   const additionalHostnames = gateway.additionalHostnames || [];
@@ -356,8 +357,10 @@ EOF
 \`\`\``
       : '';
 
-  // Disable Istio mesh tracing in agentgateway namespaces — agentgateway handles its own tracing
-  const istioTelemetryBlock = `
+  // Disable Istio mesh tracing in agentgateway namespaces — agentgateway handles its own
+  // tracing. Skipped on mesh-less profiles, which never register the Telemetry CRD.
+  const istioTelemetryBlock = profile.spec?.mesh
+    ? `
 
 Disable Istio mesh tracing in agentgateway namespaces to prevent duplicate spans:
 
@@ -383,7 +386,8 @@ spec:
   tracing:
     - disableSpanReporting: true
 EOF
-\`\`\``;
+\`\`\``
+    : '';
 
   // Label spoke gateway as a global service so hub can reach it via mesh.internal
   const globalServiceBlock = isSpoke

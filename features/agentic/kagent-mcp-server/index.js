@@ -18,6 +18,14 @@ import { Feature } from '../../../src/lib/feature.js';
  * AccessPolicy enforcement attaches to -- without it the server deploys fine
  * but no AccessPolicy targeting it can ever attach.
  *
+ * Also applies a same-named `RemoteMCPServer` (kagent.dev/v1alpha3) pointing at
+ * the MCPServer's own generated Service -- confirmed live that
+ * AgentTemplate.spec.tools[].mcp.server is CEL-validated to require
+ * `kind: RemoteMCPServer` with `apiGroup` entirely absent; binding an
+ * AgentTemplate directly to a `kind: MCPServer` object is rejected at
+ * admission. This is the only way an AgentTemplate (e.g. via substrate-agent's
+ * `tools: [{ mcp: serverName }]`) can consume this server's tools.
+ *
  * Configuration:
  * {
  *   serverName: string,      // Required -- MCPServer CR name
@@ -25,6 +33,7 @@ import { Feature } from '../../../src/lib/feature.js';
  *   image: string,           // Required -- container image
  *   port: number,            // Default: 8080 -- container + MCP path port
  *   path: string,            // Default: '/mcp' -- HTTP transport mount path
+ *   description: string,     // Default: `MCP server '<serverName>'` -- RemoteMCPServer.spec.description (required by its CRD)
  * }
  */
 export class KagentMcpServerFeature extends Feature {
@@ -35,6 +44,7 @@ export class KagentMcpServerFeature extends Feature {
     this.image = config.image;
     this.port = config.port || 8080;
     this.path = config.path || '/mcp';
+    this.description = config.description || `MCP server '${this.serverName}'`;
   }
 
   validate() {
@@ -69,13 +79,31 @@ export class KagentMcpServerFeature extends Feature {
     };
   }
 
+  buildRemoteMcpServer() {
+    return {
+      apiVersion: 'kagent.dev/v1alpha3',
+      kind: 'RemoteMCPServer',
+      metadata: {
+        name: this.serverName,
+        namespace: this.namespace,
+        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo' },
+      },
+      spec: {
+        description: this.description,
+        url: `http://${this.serverName}.${this.namespace}.svc.cluster.local:${this.port}${this.path}`,
+        protocol: 'STREAMABLE_HTTP',
+      },
+    };
+  }
+
   async deploy() {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
       await this.applyResource(this.buildMcpServer(), context);
+      await this.applyResource(this.buildRemoteMcpServer(), context);
       this.log(
-        `MCPServer '${this.serverName}' applied in namespace '${this.namespace}'`,
+        `MCPServer '${this.serverName}' + RemoteMCPServer applied in namespace '${this.namespace}'`,
         'success'
       );
     }
@@ -85,6 +113,7 @@ export class KagentMcpServerFeature extends Feature {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
+      await this.deleteResource('remotemcpserver', this.serverName, this.namespace, context);
       await this.deleteResource('mcpserver', this.serverName, this.namespace, context);
     }
     this.log(`kagent-mcp-server '${this.serverName}' cleaned up`, 'success');

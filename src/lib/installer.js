@@ -329,7 +329,6 @@ function buildComponentBaseValues(componentName, cfg) {
   switch (componentName) {
     case 'base':
       return {
-        defaultRevision: 'stable',
         profile: cfg.meshProfile,
       };
     case 'istiod':
@@ -399,6 +398,13 @@ export class InstallerManager {
 
     if (!profile) throw new Error('profile is required');
     if (!cluster) throw new Error('cluster is required');
+
+    if (!ProfileSchema.hasMesh(profile)) {
+      await this.#installAddons({ profile, cluster, phase: 'pre', templateContext });
+      await this.#installAddons({ profile, cluster, phase: 'post', templateContext });
+      return true;
+    }
+
     if (!licenseKey) throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
 
     const cfg = resolveConfig(profile, { ...options, licenseKey });
@@ -414,7 +420,9 @@ export class InstallerManager {
       });
       const flags = contextFlags(cluster.context);
       const resolved = ConfigResolver.resolveForCluster(profile, cluster);
-      const extraNs = resolved.components.includes('peering-eastwest') ? ['istio-eastwest'] : [];
+      const extraNs = [
+        ...new Set(resolved.components.map(c => COMPONENT_NAMESPACE_MAP[c]).filter(Boolean)),
+      ];
       await showStatus(cfg.namespace, flags.kubectl, cluster.name, extraNs);
       await this.#installAddons({ profile, cluster, phase: 'post', templateContext });
       return;
@@ -455,6 +463,16 @@ export class InstallerManager {
       if (!addonConfig.clusterRole) addonConfig.clusterRole = cluster.role || null;
       // Inject peer addon names — addons can check for co-installed addons
       addonConfig.clusterAddons = clusterAddons;
+      // Addons that touch Istio CRs (e.g. Telemetry) need to know whether a mesh is
+      // actually installed on this profile — mesh-less "addon-only" profiles never
+      // register those CRDs.
+      addonConfig.meshEnabled = ProfileSchema.hasMesh(profile);
+      // Gateway API CRD version — profile-level, shared by mesh install and any addon
+      // (e.g. agentgateway) that installs its own Gateway resources. Addon config wins
+      // if explicitly set.
+      if (!addonConfig.gatewayApiVersion) {
+        addonConfig.gatewayApiVersion = ProfileSchema.getGatewayApiVersion(profile);
+      }
       if (!FeatureManager.has(addonName)) {
         Logger.warn(`Addon '${addonName}' is not registered, skipping`);
         continue;
@@ -603,7 +621,9 @@ export class InstallerManager {
         { ignoreError: true }
       );
 
-      const extraNs = resolved.components.includes('peering-eastwest') ? ['istio-eastwest'] : [];
+      const extraNs = [
+        ...new Set(resolved.components.map(c => COMPONENT_NAMESPACE_MAP[c]).filter(Boolean)),
+      ];
       await showStatus(cfg.namespace, flags.kubectl, cluster.name, extraNs);
 
       spinner.succeed('Istio Ambient installed — installing post-install addons...');
@@ -631,7 +651,6 @@ export class InstallerManager {
 
     if (!profileName) throw new Error('profileName is required');
     if (!clusters || clusters.length === 0) throw new Error('At least one cluster is required');
-    if (!licenseKey) throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
 
     for (const cluster of clusters) {
       const flag = contextFlags(cluster.context).kubectl;
@@ -644,6 +663,10 @@ export class InstallerManager {
     Logger.info('All clusters verified accessible');
 
     const profile = await ProfileManager.load(profileName);
+    const hasMesh = ProfileSchema.hasMesh(profile);
+    if (hasMesh && !licenseKey) {
+      throw new Error('ENTERPRISE_ISTIO_LICENSE is required for installation');
+    }
 
     const environmentName = ProfileSchema.getEnvironment(profile);
     let environment = null;
@@ -666,7 +689,9 @@ export class InstallerManager {
     }
 
     Logger.info(`Profile: ${profileName}`);
-    Logger.info(`Installing Istio Ambient on ${clusters.length} cluster(s):`);
+    Logger.info(
+      `${hasMesh ? 'Installing Istio Ambient' : 'Installing addons'} on ${clusters.length} cluster(s):`
+    );
     for (const c of clusters) {
       Logger.info(`  - ${c.name} (${c.role || 'default'}): ${c.context}`);
     }
@@ -681,7 +706,7 @@ export class InstallerManager {
 
     // For multicluster: install shared root CA + per-cluster intermediate CAs
     // before istiod starts so cacerts secret is present at istiod startup.
-    if (clusters.length > 1) {
+    if (hasMesh && clusters.length > 1) {
       const certMode = ProfileSchema.getCertMode(profile);
       const clusterList = orderedClusters.map(c => ({ name: c.name, context: c.context }));
       console.log();
@@ -735,7 +760,7 @@ export class InstallerManager {
       });
     }
 
-    if (clusters.length > 1) {
+    if (hasMesh && clusters.length > 1) {
       console.log();
       Logger.info('Configuring multicluster connectivity...');
       const clusterList = orderedClusters.map(c => ({ name: c.name, context: c.context }));
@@ -865,20 +890,30 @@ export class InstallerManager {
     const spinner = new SpinnerLogger();
 
     const installMethod = profile ? ProfileSchema.getInstallMethod(profile) : 'helm';
+    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : true;
 
-    spinner.start(`Uninstalling Istio Ambient from ${cluster?.name || contextDisplay}...`);
+    spinner.start(
+      `${hasMesh ? 'Uninstalling Istio Ambient' : 'Uninstalling addons'} from ${cluster?.name || contextDisplay}...`
+    );
 
     try {
-      if (installMethod === 'operator') {
-        await OperatorInstaller.uninstall(context);
-      }
-
       const flags = contextFlags(context);
-      for (const release of ['ztunnel', 'istio-cni', 'istiod', 'istio-base']) {
-        try {
-          await CommandRunner.exec(`helm ${flags.helm} uninstall ${release} -n ${namespace}`);
-        } catch (err) {
-          if (!/not found|no deployed releases/i.test(err.message)) throw err;
+
+      if (hasMesh) {
+        if (installMethod === 'operator') {
+          await OperatorInstaller.uninstall(context);
+        }
+
+        for (const component of ['ztunnel', 'cni', 'istiod', 'base']) {
+          const release = RELEASE_NAME_MAP[component];
+          const releaseNamespace = COMPONENT_NAMESPACE_MAP[component] || namespace;
+          try {
+            await CommandRunner.exec(
+              `helm ${flags.helm} uninstall ${release} -n ${releaseNamespace}`
+            );
+          } catch (err) {
+            if (!/not found|no deployed releases/i.test(err.message)) throw err;
+          }
         }
       }
 
@@ -904,19 +939,23 @@ export class InstallerManager {
         }
       }
 
-      await InstallerManager.cleanupIstioCRDs(context, spinner);
+      if (hasMesh) {
+        await InstallerManager.cleanupIstioCRDs(context, spinner);
 
-      if (uninstallAddons) {
-        await CommandRunner.exec(
-          `kubectl ${flags.kubectl} delete namespace istio-system --ignore-not-found=true`,
-          { ignoreError: true }
-        );
+        if (uninstallAddons) {
+          await CommandRunner.exec(
+            `kubectl ${flags.kubectl} delete namespace istio-system --ignore-not-found=true`,
+            { ignoreError: true }
+          );
+        }
       }
 
       if (uninstallAddons && profile && cluster) {
         const resolved = ConfigResolver.resolveForCluster(profile, cluster);
         if (resolved.addons && resolved.addons.length > 0) {
-          spinner.succeed('Istio components removed — cleaning up addons...');
+          spinner.succeed(
+            hasMesh ? 'Istio components removed — cleaning up addons...' : 'Cleaning up addons...'
+          );
 
           // Build template context — mirrors install path so {{env.*}} and {{infra.*}} vars resolve during cleanup
           let cleanupTemplateContext = null;
@@ -970,7 +1009,11 @@ export class InstallerManager {
         await InstallerManager.cleanupAddonCRDs(context, spinner);
       }
 
-      const uninstalledWhat = uninstallAddons ? 'Agentic stack' : 'Istio Ambient';
+      const uninstalledWhat = uninstallAddons
+        ? 'Agentic stack'
+        : hasMesh
+          ? 'Istio Ambient'
+          : 'Addons';
       spinner.succeed(`${uninstalledWhat} uninstalled from ${cluster?.name || contextDisplay}`);
       return true;
     } catch (error) {
@@ -1000,9 +1043,12 @@ export class InstallerManager {
     Logger.info('All clusters verified accessible');
 
     const profile = profileName ? await ProfileManager.load(profileName) : null;
+    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : true;
     const uninstallStartTime = Date.now();
 
-    Logger.info(`Uninstalling Istio Ambient from ${clusters.length} cluster(s):`);
+    Logger.info(
+      `${hasMesh ? 'Uninstalling Istio Ambient' : 'Uninstalling addons'} from ${clusters.length} cluster(s):`
+    );
     for (const c of clusters) {
       Logger.info(`  - ${c.name} (${c.role || 'default'}): ${c.context}`);
     }
@@ -1011,7 +1057,7 @@ export class InstallerManager {
     const otherClusters = clusters.filter(c => c.role !== 'management');
     const orderedClusters = [...otherClusters, ...mgmtClusters];
 
-    if (clusters.length > 1) {
+    if (hasMesh && clusters.length > 1) {
       console.log();
       Logger.info('Cleaning up multicluster connectivity...');
       const clusterList = orderedClusters.map(c => ({ name: c.name, context: c.context }));
@@ -1045,7 +1091,11 @@ export class InstallerManager {
     const secs = Math.floor((elapsed % 60000) / 1000);
     const duration = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
     console.log();
-    const uninstalledWhat = uninstallAddons ? 'Agentic stack' : 'Istio Ambient';
+    const uninstalledWhat = uninstallAddons
+      ? 'Agentic stack'
+      : hasMesh
+        ? 'Istio Ambient'
+        : 'Addons';
     Logger.success(`${uninstalledWhat} uninstalled from all clusters in ${duration}`);
   }
 

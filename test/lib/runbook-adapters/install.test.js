@@ -13,9 +13,9 @@ const singleClusterSelection = {
   profile: {
     metadata: { name: 'test-profile' },
     spec: {
+      gatewayApiVersion: 'v1.4.0',
       mesh: {
         istioVersion: '1.30.0',
-        gatewayApiVersion: 'v1.4.0',
         profile: 'ambient',
         image: {
           tag: '1.30.0-solo',
@@ -47,9 +47,9 @@ const multiClusterSelection = {
   profile: {
     metadata: { name: 'test-profile' },
     spec: {
+      gatewayApiVersion: 'v1.4.0',
       mesh: {
         istioVersion: '1.30.0',
-        gatewayApiVersion: 'v1.4.0',
         profile: 'ambient',
         peering: 'helm',
         certificates: { mode: 'self-signed' },

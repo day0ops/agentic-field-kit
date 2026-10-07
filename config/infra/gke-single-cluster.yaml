@@ -10,7 +10,7 @@ spec:
   settings:
     nodes:
       desired: 2
-      type: n1-standard-2
+      type: n1-standard-4
 
   clusters:
     - name: demo

@@ -93,7 +93,8 @@ const fullSelection = {
   profile: {
     metadata: { name: 'eks-multi-cluster-peering-with-agw-hub-spoke' },
     spec: {
-      mesh: { gatewayApiVersion: 'v1.4.0', istioVersion: '1.30.0' },
+      gatewayApiVersion: 'v1.4.0',
+      mesh: { istioVersion: '1.30.0' },
       addons: {
         global: [{ name: 'cilium', version: '1.19.4', description: 'eBPF CNI' }],
         clusters: [

@@ -5,7 +5,7 @@ import { InfraAdapter } from '../../../src/lib/runbook-adapters/infra.js';
 const mockSelection = {
   profile: {
     metadata: { name: 'eks-multi-cluster-peering-with-agw-hub-spoke' },
-    spec: { mesh: { gatewayApiVersion: 'v1.4.0' } },
+    spec: { gatewayApiVersion: 'v1.4.0', mesh: {} },
   },
   infraProfile: {
     metadata: { name: 'eks-multi-cluster' },

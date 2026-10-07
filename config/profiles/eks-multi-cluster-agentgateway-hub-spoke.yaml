@@ -11,10 +11,10 @@ metadata:
 spec:
   infra: eks-multi-cluster
   environment: aws-dev
+  gatewayApiVersion: v1.5.0
 
   mesh:
     istioVersion: 1.30.3
-    gatewayApiVersion: v1.5.0
     profile: ambient
     peering: helm
 
@@ -129,7 +129,7 @@ spec:
           - name: external-dns
             description: Automatic DNS record management via Route53
             namespace: external-dns
-            version: 1.21.1
+            version: 1.23.0
             config:
               provider: route53
               domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'

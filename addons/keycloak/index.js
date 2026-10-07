@@ -223,7 +223,7 @@ export class KeycloakFeature extends AddonFeature {
         'keycloak',
         '-n',
         this.keycloakNamespace,
-        `external-dns.alpha.kubernetes.io/hostname=${this.hostname}`,
+        `external-dns.kubernetes.io/hostname=${this.hostname}`,
         '--overwrite',
       ]);
       this.log(`Annotated keycloak service for external-dns: ${this.hostname}`, 'info');

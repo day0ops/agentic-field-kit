@@ -3,7 +3,17 @@
 // tpl: return v if it's a real value (not an unresolved {{...}} template), otherwise fb
 const tpl = (v, fb) => (v && !/\{\{/.test(v) ? v : fb);
 
-export function envVarsFor(_addonCfg, _clusterName) {
+export function envVarsFor(addonCfg, _clusterName) {
+  const letsencrypt = addonCfg.config?.letsencrypt;
+  if (letsencrypt?.enabled && letsencrypt.provider === 'clouddns' && !letsencrypt.project) {
+    return [
+      {
+        name: 'GCP_PROJECT',
+        description: 'GCP project the Cloud DNS zone lives in',
+        required: true,
+      },
+    ];
+  }
   return [];
 }
 
@@ -31,6 +41,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, _env)
   const ns = addonCfg.namespace || 'cert-manager';
   const letsencrypt = addonCfg.config?.letsencrypt;
   const ctx = `$${clusterName.toUpperCase()}_CONTEXT`;
+  const isCloudDns = letsencrypt?.enabled && letsencrypt.provider === 'clouddns';
 
   const selfSignedIssuer = `
 
@@ -48,7 +59,32 @@ EOF
 \`\`\``;
 
   let clusterIssuer = selfSignedIssuer;
-  if (letsencrypt?.enabled) {
+  if (letsencrypt?.enabled && isCloudDns) {
+    const email = tpl(letsencrypt.email, null) || '$ACME_EMAIL';
+    const project = tpl(letsencrypt.project, null) || '$GCP_PROJECT';
+    clusterIssuer += `
+
+Create the Google Cloud DNS ClusterIssuer for Let's Encrypt (uses Workload Identity -- no key file):
+
+\`\`\`bash
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns
+spec:
+  acme:
+    email: ${email}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-dns
+    solvers:
+      - dns01:
+          cloudDNS:
+            project: ${project}
+EOF
+\`\`\``;
+  } else if (letsencrypt?.enabled) {
     const email = tpl(letsencrypt.email, null) || '$ACME_EMAIL';
     const region = tpl(letsencrypt.region, null) || '$AWS_REGION';
     clusterIssuer += `
@@ -75,6 +111,12 @@ EOF
 \`\`\``;
   }
 
+  const wifArg = isCloudDns
+    ? `  --set-string serviceAccount.annotations."iam\\.gke\\.io/gcp-service-account"="${
+        tpl(letsencrypt?.gcpServiceAccount, null) || '<gcp-service-account-email>'
+      }" \\\n`
+    : '';
+
   return `Install cert-manager for TLS certificate management on the **${clusterName}** cluster.
 
 \`\`\`bash
@@ -87,7 +129,7 @@ helm upgrade --install cert-manager jetstack/cert-manager \\
   --create-namespace \\
   --version v$CERT_MANAGER_VERSION \\
   --set crds.enabled=true \\
-  --wait
+${wifArg}  --wait
 \`\`\`
 ${clusterIssuer}`;
 }

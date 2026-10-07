@@ -484,7 +484,7 @@ ${
 Annotate the Service for external-dns (the Service manifest has no hostname of its own — external-dns needs this to create the DNS record):
 
 \`\`\`bash
-kubectl annotate service keycloak -n ${ns} "external-dns.alpha.kubernetes.io/hostname=${hostname}" --overwrite
+kubectl annotate service keycloak -n ${ns} "external-dns.kubernetes.io/hostname=${hostname}" --overwrite
 \`\`\`
 `
     : ''

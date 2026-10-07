@@ -279,6 +279,9 @@ export class InfraStateManager {
       if (cluster.iam) {
         entry.iam = cluster.iam;
       }
+      if (cluster.storage) {
+        entry.storage = cluster.storage;
+      }
       return entry;
     });
 

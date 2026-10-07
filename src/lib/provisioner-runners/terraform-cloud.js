@@ -74,6 +74,12 @@ const PROVIDER_CONFIGS = {
         vars.dns_parent_domain = dnsConfig.parentZone.domain;
         vars.dns_child_zone_name = dnsConfig.childZone;
       }
+      if (config.enableWorkloadStorage) vars.enable_workload_storage = true;
+      if (config.workloadStorageKsaNamespace) {
+        vars.workload_storage_ksa_namespace = config.workloadStorageKsaNamespace;
+      }
+      if (config.workloadStorageKsaName)
+        vars.workload_storage_ksa_name = config.workloadStorageKsaName;
       return vars;
     },
   },
@@ -85,7 +91,7 @@ const PROVIDER_CONFIGS = {
     defaultRegion: 'australia-southeast1',
     defaultNodeType: 'n1-standard-2',
     requiredEnv: ['GCP_PROJECT', 'GOOGLE_APPLICATION_CREDENTIALS'],
-    generateVars(config) {
+    generateVars(config, dnsConfig) {
       const vars = {
         owner: config.owner,
         gke_project: config.gkeProject,
@@ -98,6 +104,25 @@ const PROVIDER_CONFIGS = {
       if (config.team) vars.team = config.team;
       if (config.purpose) vars.purpose = config.purpose;
       if (config.kubernetesVersion) vars.kubernetes_version = config.kubernetesVersion;
+      if (config.releaseChannel) vars.gke_release_channel = config.releaseChannel;
+      if (config.enableBetaApis?.length) vars.gke_enable_beta_apis = config.enableBetaApis;
+      if (config.enableWorkloadIdentity) vars.gke_enable_workload_identity = true;
+      if (config.enableWorkloadStorage) vars.enable_workload_storage = true;
+      if (config.workloadStorageKsaNamespace) {
+        vars.workload_storage_ksa_namespace = config.workloadStorageKsaNamespace;
+      }
+      if (config.workloadStorageKsaName)
+        vars.workload_storage_ksa_name = config.workloadStorageKsaName;
+      if (config.disableFilestoreCsi) vars.gke_disable_filestore_csi = true;
+      if (config.nodeAutoUpgrade === false) vars.gke_node_auto_upgrade = false;
+      // This environment only ever creates its own Cloud DNS zone -- it never reaches into
+      // Route53 directly. The NS delegation record in the primary (Route53) parent zone is
+      // created separately, see applyDnsDelegation().
+      if (dnsConfig?.provider === 'cloud-dns' && dnsConfig?.parentZone) {
+        vars.enable_dns = true;
+        vars.dns_parent_domain = dnsConfig.parentZone.domain;
+        vars.dns_child_zone_name = dnsConfig.childZone;
+      }
       return vars;
     },
   },
@@ -209,6 +234,10 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
     this.tfTemplateDir = join(this.outputDir, 'tf-template');
     this.stateFile = join(this.outputDir, 'terraform.tfstate');
     this.varFile = join(this.tfTemplateDir, 'terraform.tfvars');
+
+    this.dnsDelegationDir = join(ENVIRONMENTS_DIR, 'dns-delegation');
+    this.dnsDelegationVarFile = join(this.tfTemplateDir, 'dns-delegation.tfvars');
+    this.dnsDelegationStateFile = join(this.outputDir, 'dns-delegation.tfstate');
   }
 
   logInfo(message) {
@@ -254,6 +283,18 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
     // Extract DNS outputs if DNS was enabled
     const dnsOutputs = await this.extractDnsInfo(terraform);
 
+    // Primary DNS is always Route53. When this cloud's own native DNS (e.g. Cloud DNS) isn't
+    // Route53 itself, the child zone just created above still needs an NS delegation record
+    // in the Route53 parent zone to be reachable at all -- that record is cloud-neutral and
+    // lives in the separate dns-delegation environment, never created by this one directly.
+    if (
+      this.dnsConfig &&
+      this.dnsConfig.provider !== 'route53' &&
+      dnsOutputs?.nameservers?.length
+    ) {
+      await this.applyDnsDelegation(config, dnsOutputs);
+    }
+
     return { clusters: clusterResults, dns: dnsOutputs };
   }
 
@@ -263,6 +304,10 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
       `Destroying ${this.clusters.length} ${this.providerConfig.label} cluster${this.clusters.length === 1 ? '' : 's'}`
     );
 
+    if (existsSync(this.dnsDelegationStateFile)) {
+      await this.destroyDnsDelegation();
+    }
+
     if (!existsSync(this.stateFile)) {
       this.logWarn('No terraform state file found. Nothing to destroy.');
       return;
@@ -271,6 +316,55 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
     const terraform = new TerraformRunner(this.terraformDir);
     await terraform.init({ stream: true });
     await terraform.destroy(this.varFile, this.stateFile, { autoApprove: true, stream: true });
+  }
+
+  /**
+   * Creates the Route53 NS delegation record pointing at a child zone hosted in this cloud's
+   * own native DNS. Cloud-neutral and AWS-only -- this is the one place outside an EKS
+   * environment (which owns both ends in the same cloud) that ever touches Route53.
+   */
+  async applyDnsDelegation(config, dnsOutputs) {
+    if (!this.dnsConfig.parentZone?.hostedZoneId) {
+      this.logWarn(
+        'DNS zone created but no parentZone.hostedZoneId configured -- skipping Route53 delegation'
+      );
+      return;
+    }
+
+    this.logInfo(
+      `Delegating ${this.dnsConfig.childZone}.${this.dnsConfig.parentZone.domain} from Route53`
+    );
+
+    const lines = [
+      `# Generated by agentic CLI`,
+      `# Profile: ${this.profileName}`,
+      `# Delegates this environment's own DNS zone from the Route53 parent`,
+      ``,
+      `aws_profile = ${formatTfValue(config.awsProfile || 'default')}`,
+      `dns_parent_zone_id = ${formatTfValue(this.dnsConfig.parentZone.hostedZoneId)}`,
+      `dns_parent_domain = ${formatTfValue(this.dnsConfig.parentZone.domain)}`,
+      `dns_child_zone_name = ${formatTfValue(this.dnsConfig.childZone)}`,
+      `dns_child_nameservers = ${formatTfValue(dnsOutputs.nameservers)}`,
+      ``,
+    ];
+    writeFileSync(this.dnsDelegationVarFile, lines.join('\n'));
+
+    const terraform = new TerraformRunner(this.dnsDelegationDir);
+    await terraform.init({ stream: true });
+    await terraform.apply(this.dnsDelegationVarFile, this.dnsDelegationStateFile, {
+      autoApprove: true,
+      stream: true,
+    });
+  }
+
+  async destroyDnsDelegation() {
+    this.logInfo('Removing Route53 delegation record');
+    const terraform = new TerraformRunner(this.dnsDelegationDir);
+    await terraform.init({ stream: true });
+    await terraform.destroy(this.dnsDelegationVarFile, this.dnsDelegationStateFile, {
+      autoApprove: true,
+      stream: true,
+    });
   }
 
   ensureDirectories() {
@@ -385,6 +479,14 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
       privateNodes: nodesCfg.private,
       gkeProject:
         provisioner.project || (this.providerType === 'gke' ? process.env.GCP_PROJECT : undefined),
+      releaseChannel: provisioner.release_channel || process.env.GKE_RELEASE_CHANNEL || undefined,
+      enableBetaApis: provisioner.enable_beta_apis || undefined,
+      enableWorkloadIdentity: provisioner.enable_workload_identity === true,
+      enableWorkloadStorage: provisioner.enable_workload_storage === true,
+      workloadStorageKsaNamespace: provisioner.workload_storage_ksa_namespace || undefined,
+      workloadStorageKsaName: provisioner.workload_storage_ksa_name || undefined,
+      disableFilestoreCsi: provisioner.disable_filestore_csi === true,
+      nodeAutoUpgrade: provisioner.node_auto_upgrade === false ? false : undefined,
       aksServicePrincipal:
         provisioner.arm_client_id || process.env.ARM_CLIENT_ID
           ? {
@@ -599,6 +701,7 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
 
       const network = await this.extractNetworkInfo(terraform, prefix, i);
       const iam = await this.extractIamInfo(terraform, prefix, i);
+      const storage = await this.extractStorageInfo(terraform, prefix, i);
 
       results.push({
         name: clusterLabel,
@@ -609,6 +712,7 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
         verified: false,
         ...(network ? { network } : {}),
         ...(iam ? { iam } : {}),
+        ...(storage ? { storage } : {}),
       });
     }
 
@@ -657,6 +761,7 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
 
         const network = await this.extractNetworkInfo(terraform, prefix, i);
         const iam = await this.extractIamInfo(terraform, prefix, i);
+        const storage = await this.extractStorageInfo(terraform, prefix, i);
 
         results.push({
           name: clusterLabel,
@@ -667,6 +772,7 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
           verified: false,
           ...(network ? { network } : {}),
           ...(iam ? { iam } : {}),
+          ...(storage ? { storage } : {}),
         });
       }
     }
@@ -731,6 +837,46 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
       return { albControllerRoleArn };
     } catch {
       this.logWarn(`Could not extract IAM outputs for cluster index ${clusterIndex}`);
+      return null;
+    }
+  }
+
+  /**
+   * Workload storage (null unless enable_workload_storage was set) -- a generic bucket bound
+   * to a Kubernetes ServiceAccount, used today by Agent Substrate for actor snapshots but not
+   * specific to it. Cloud-agnostic by design: the bucket URI already carries its own scheme
+   * (gs:// or s3://), and identityAnnotationKey/Value are a ready-to-apply kubectl annotate
+   * pair (GCP's iam.gke.io/gcp-service-account + GSA email, or AWS IRSA's
+   * eks.amazonaws.com/role-arn + role ARN) -- callers never need to know which cloud produced
+   * them.
+   */
+  async extractStorageInfo(terraform, prefix, clusterIndex) {
+    try {
+      const buckets = await terraform.getOutput(
+        this.stateFile,
+        `${prefix}_workload_storage_bucket`
+      );
+      const annotationKeys = await terraform.getOutput(
+        this.stateFile,
+        `${prefix}_workload_storage_identity_annotation_key`
+      );
+      const annotationValues = await terraform.getOutput(
+        this.stateFile,
+        `${prefix}_workload_storage_identity_annotation_value`
+      );
+      const bucket = Array.isArray(buckets) ? buckets[clusterIndex] || null : null;
+      if (!bucket) return null;
+      return {
+        bucket,
+        identityAnnotationKey: Array.isArray(annotationKeys)
+          ? annotationKeys[clusterIndex] || null
+          : null,
+        identityAnnotationValue: Array.isArray(annotationValues)
+          ? annotationValues[clusterIndex] || null
+          : null,
+      };
+    } catch {
+      this.logWarn(`Could not extract workload storage outputs for cluster index ${clusterIndex}`);
       return null;
     }
   }
@@ -819,6 +965,9 @@ function formatTfValue(value) {
   if (typeof value === 'string') return `"${value}"`;
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'number') return String(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(v => formatTfValue(v)).join(', ')}]`;
+  }
   if (typeof value === 'object' && value !== null) {
     const entries = Object.entries(value)
       .map(([k, v]) => `    ${k} = ${formatTfValue(v)}`)

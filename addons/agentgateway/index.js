@@ -34,6 +34,9 @@ export class AgentgatewayFeature extends AddonFeature {
     this.telemetryGatewayNamespace =
       config.telemetryGatewayNamespace || config.gateway?.namespace || this.namespace;
     this.ambientEnabled = config.ambientEnabled === true;
+    // Whether an Istio mesh is installed on this profile -- mesh-less "addon-only"
+    // profiles never register the Telemetry CRD, so mesh-tracing cleanup must be skipped.
+    this.meshEnabled = config.meshEnabled !== false;
     this.globalGateway = config.globalGateway === true;
     this.gatewayServiceType = config.gateway?.serviceType || null;
     this.gatewaySourceRanges = config.gateway?.sourceRanges || null;
@@ -196,34 +199,16 @@ export class AgentgatewayFeature extends AddonFeature {
     }
 
     // Disable Istio mesh tracing here; agentgateway does its own tracing via
-    // EnterpriseAgentgatewayPolicy, avoiding duplicate spans in Tempo.
-    await this.applyResource(
-      {
-        apiVersion: 'telemetry.istio.io/v1',
-        kind: 'Telemetry',
-        metadata: {
-          name: 'disable-mesh-tracing',
-          namespace: this.namespace,
-          labels: {
-            'app.kubernetes.io/managed-by': 'agentic-demo',
-            'agentic.demo/feature': 'agentgateway',
-          },
-        },
-        spec: {
-          tracing: [{ disableSpanReporting: true }],
-        },
-      },
-      this.kubeContext
-    );
-
-    if (this.gateway) {
+    // EnterpriseAgentgatewayPolicy, avoiding duplicate spans in Tempo. Only applies when a
+    // mesh is actually installed -- mesh-less profiles never register the Telemetry CRD.
+    if (this.meshEnabled) {
       await this.applyResource(
         {
           apiVersion: 'telemetry.istio.io/v1',
           kind: 'Telemetry',
           metadata: {
             name: 'disable-mesh-tracing',
-            namespace: this.telemetryGatewayNamespace,
+            namespace: this.namespace,
             labels: {
               'app.kubernetes.io/managed-by': 'agentic-demo',
               'agentic.demo/feature': 'agentgateway',
@@ -235,6 +220,27 @@ export class AgentgatewayFeature extends AddonFeature {
         },
         this.kubeContext
       );
+
+      if (this.gateway) {
+        await this.applyResource(
+          {
+            apiVersion: 'telemetry.istio.io/v1',
+            kind: 'Telemetry',
+            metadata: {
+              name: 'disable-mesh-tracing',
+              namespace: this.telemetryGatewayNamespace,
+              labels: {
+                'app.kubernetes.io/managed-by': 'agentic-demo',
+                'agentic.demo/feature': 'agentgateway',
+              },
+            },
+            spec: {
+              tracing: [{ disableSpanReporting: true }],
+            },
+          },
+          this.kubeContext
+        );
+      }
     }
 
     this.log(`agentgateway ${mode} installed successfully`, 'success');

@@ -12,11 +12,32 @@ spec:
     email: kasun.talwatta@solo.io
 
   tls:
-    issuer: selfsigned-issuer
+    issuer: letsencrypt-dns
+
+  dns:
+    provider: cloud-dns
+    parentZone:
+      domain: kasunt.apac.fe.solo.io
+      # route53
+      hostedZoneId: Z08818701HDZ6PBD6LPXU
+    childZone: agentic-demo-gke
+    # GCP Cloud DNS managed zone resource name
+    managedZone: agentic-demo-gke
+    txtOwnerId: agentic-demo
+
+    # used by cert-manager and external-dns
+    gcpServiceAccount: kasunt-sandbox-agentic-dns@field-engineering-apac.iam.gserviceaccount.com
 
   # Okta tenant
   okta:
     domain: integrator-1335842.okta.com
+
+  # CIDR allowlist applied to public-facing GCP LoadBalancers (spec.loadBalancerSourceRanges).
+  # Checkpoint Harmony SASE documented egress range.
+  security:
+    vpnSourceRanges:
+      - 165.99.148.61/32
+      - 64.226.138.86/32
 
   keycloak:
     scheme: https
@@ -24,20 +45,39 @@ spec:
 
   agentregistry:
     scheme: https
-    version: 2026.8.0
+    version: 2026.9.0
 
   agentgateway:
     scheme: https
-    version: v2026.8.2
+    version: v2026.9.2
 
   kagent:
     scheme: https
-    version: 0.5.6
+    # 1.0.0-alpha6 pairs with substrate 0.3.0-alpha3 (see addons/kagent/index.js): that fixes
+    # CreateActorEgressPolicy/session creation, but real A2A message delivery then fails on every
+    # session with atenet-router reporting "Connect: tunnel failed" (root cause not isolated).
+    # Pairing alpha6 with beta6 instead is a hard protobuf field-number collision, not a
+    # workaround: EgressRule field 2 is Cidrs in beta6's schema and Https in 0.3.0-alpha3's, so
+    # CreateSession fails outright, reproduced even on Solo's own minimal "Your First Agent"
+    # tutorial -- see addons/kagent/index.js for the full writeup. alpha5 is an older architecture
+    # generation (`kagent.dev` apiGroup, no `Agent` CRD, Harness.allowedAgentTemplates selector
+    # instead of an Agent pairing) that substrate-agent now targets directly -- see that
+    # feature's class doc comment.
+    version: 1.0.0-alpha5
+
+  # Agent Substrate chart version
+  substrate:
+    # alpha5's native, correctly-paired substrate version (see addons/kagent/index.js and the
+    # kagent.version comment above for the alpha6/beta6 vs alpha6/0.3.0-alpha3 incompatibilities
+    # that led here).
+    version: 0.2.0-beta6-5462374
 
   soloUi:
-    version: 0.5.6
+    version: 0.5.7
 
   images:
+    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...).
+    kagentHarness: ghcr.io/kagent-dev/kagent/golang-adk@sha256:0ef67974d39518b18de074bd9762fb4aea9764fc8836eeb45d7868b358eecb30
     finflow:
       marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.2
       newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.2
@@ -64,6 +104,18 @@ spec:
       runbookMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-runbook-mcp:v0.1.0
       repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
       chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
+    fraudSwarm:
+      # Published by fraud-investigation-swarm's push CI run against
+      # main@219a5a1 (2026-09-29, PR #5 merge: go-sdk v1.7.0 bump). Swap for
+      # a v0.1.0 tag once a real release is cut there.
+      coreBankingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/core-banking-mcp:sha-219a5a1a0a2a
+      watchlistMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/watchlist-mcp:sha-219a5a1a0a2a
+      deviceRiskMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/device-risk-mcp:sha-219a5a1a0a2a
+      typologyMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/typology-mcp:sha-219a5a1a0a2a
+      # Published by fraud-investigation-swarm's PR #7 CI run (2026-10-03,
+      # 70af2ef: burst mode stamps fresh request ids per run and tolerates
+      # per-alert failures). Swap for a v0.1.0 tag once a real release is cut.
+      opsConsole: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:sha-bdc896656686
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
@@ -91,6 +143,7 @@ spec:
       kagentUi: kagent-ui.agentic-demo-gke.kasunt.apac.fe.solo.io
       agentgatewayUi: agw-ui.agentic-demo-gke.kasunt.apac.fe.solo.io
       meshUi: mesh-ui.agentic-demo-gke.kasunt.apac.fe.solo.io
+      fraudOpsConsole: console.agentic-demo-gke.kasunt.apac.fe.solo.io
     app:
       main: app.agentic-demo-gke.kasunt.apac.fe.solo.io
       retailReturns: retail-returns.agentic-demo-gke.kasunt.apac.fe.solo.io

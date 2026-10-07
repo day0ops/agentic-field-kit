@@ -18,6 +18,7 @@ import { AgentregistryFeature } from './agentregistry/index.js';
 import { KagentFeature } from './kagent/index.js';
 import { SpireFeature } from './spire/index.js';
 import { AwsLoadBalancerControllerFeature } from './aws-load-balancer-controller/index.js';
+import { OtelCollectorFeature } from './otel-collector/index.js';
 
 // Register all addons
 FeatureManager.register('cert-manager', CertManagerFeature);
@@ -31,6 +32,7 @@ FeatureManager.register('agentregistry', AgentregistryFeature);
 FeatureManager.register('kagent', KagentFeature);
 FeatureManager.register('spire', SpireFeature);
 FeatureManager.register('aws-load-balancer-controller', AwsLoadBalancerControllerFeature);
+FeatureManager.register('otel-collector', OtelCollectorFeature);
 
 // Export for direct use if needed
 export {
@@ -45,4 +47,5 @@ export {
   KagentFeature,
   SpireFeature,
   AwsLoadBalancerControllerFeature,
+  OtelCollectorFeature,
 };

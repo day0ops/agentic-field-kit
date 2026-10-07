@@ -1,0 +1,147 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: gke-single-cluster-mesh-with-kagent-substrate
+  description: |
+    Single GKE cluster ambient mesh with kagent Enterprise + Agent Substrate, keycloak OIDC login, and enterprise agentgateway fronting the UI over Google Cloud DNS + Let's Encrypt.
+
+spec:
+  infra: gke-single-cluster-substrate
+  environment: google-dev
+  gatewayApiVersion: v1.6.0
+
+  addons:
+    - name: cert-manager
+      description: TLS certificate management (Let's Encrypt via Google Cloud DNS)
+      version: 1.20.2
+      namespace: cert-manager
+      config:
+        letsencrypt:
+          enabled: true
+          provider: clouddns
+          email: '{{env.acme.email}}'
+          gcpServiceAccount: '{{env.dns.gcpServiceAccount}}'
+
+    - name: external-dns
+      description: Automatic DNS record management via Google Cloud DNS
+      version: 1.23.0
+      namespace: external-dns
+      config:
+        provider: google
+        domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+        gcpServiceAccount: '{{env.dns.gcpServiceAccount}}'
+
+    - name: agentgateway
+      description: AI Gateway Enterprise (GatewayClass + token exchange for kagent OIDC)
+      phase: post
+      namespace: agentgateway-system
+      version: '{{env.agentgateway.version}}'
+      config:
+        enterprise: true
+        ambientEnabled: true
+        tokenExchange:
+          enabled: true
+          issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+          jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+
+    - name: keycloak
+      description: Keycloak OIDC provider
+      phase: post
+      namespace: keycloak
+      keycloakImage: '{{env.keycloak.image}}'
+      config:
+        hostname: '{{env.domains.core.keycloak}}'
+        tls:
+          enabled: true
+          createCertificate: true
+          clusterIssuerName: letsencrypt-dns
+        realms:
+          - realm: kagent
+            groups:
+              - kagent-admins
+              - kagent-writers
+              - kagent-readers
+            clients:
+              - clientId: kagent-enterprise
+                type: confidential
+                clientSecret: kagent-enterprise-secret
+                flows:
+                  - authorization-code
+                groupMembership: true
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+                postLogoutRedirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+              - clientId: kagent-ui
+                type: public
+                flows:
+                  - authorization-code
+                clientAttributes:
+                  pkce.code.challenge.method: S256
+                groupMembership: true
+                audience: kagent-enterprise
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+              - clientId: fraud-swarm-driver
+                type: confidential
+                clientSecret: fraud-swarm-driver-secret
+                flows:
+                  - service-account
+                groupMembership: true
+                audience: kagent-enterprise
+                serviceAccountGroup: kagent-writers
+            users:
+              - username: kagent-admin
+                email: kagent-admin@example.com
+                firstName: Kagent
+                lastName: Admin
+                memberOf:
+                  - kagent-admins
+              - username: kagent-writer
+                email: kagent-writer@example.com
+                firstName: Kagent
+                lastName: Writer
+                memberOf:
+                  - kagent-writers
+              - username: kagent-reader
+                email: kagent-reader@example.com
+                firstName: Kagent
+                lastName: Reader
+                memberOf:
+                  - kagent-readers
+            # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile
+
+    - name: kagent
+      description: Solo Enterprise for kagent AI agent platform + Agent Substrate
+      phase: post
+      namespace: kagent-system
+      version: '{{env.kagent.version}}'
+      config:
+        enterprise: true
+        clusterName: mgmt-cluster
+        hostname: '{{env.domains.core.kagentUi}}'
+        gatewaySourceRanges: '{{env.security.vpnSourceRanges}}'
+        provider:
+          type: openAI
+        oidc:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientSecret: kagent-enterprise-secret
+        otel:
+          endpoint: otel-collector-opentelemetry-collector.kagent-system.svc.cluster.local:4317
+          captureSensitiveContent: false
+        substrate:
+          enabled: true
+          version: '{{env.substrate.version}}'
+          snapshots:
+            identityAnnotation:
+              key: '{{infra.clusters.demo.storage.identityAnnotationKey}}'
+              value: '{{infra.clusters.demo.storage.identityAnnotationValue}}'
+
+    - name: otel-collector
+      description: Minimal OTel Collector catching kagent/substrate OTLP into kagent's ClickHouse
+      phase: post
+      namespace: kagent-system
+      config:
+        clusterName: mgmt-cluster
