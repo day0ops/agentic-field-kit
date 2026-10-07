@@ -105,17 +105,11 @@ spec:
       repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
       chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
     fraudSwarm:
-      # Published by fraud-investigation-swarm's push CI run against
-      # main@219a5a1 (2026-09-29, PR #5 merge: go-sdk v1.7.0 bump). Swap for
-      # a v0.1.0 tag once a real release is cut there.
-      coreBankingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/core-banking-mcp:sha-219a5a1a0a2a
-      watchlistMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/watchlist-mcp:sha-219a5a1a0a2a
-      deviceRiskMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/device-risk-mcp:sha-219a5a1a0a2a
-      typologyMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/typology-mcp:sha-219a5a1a0a2a
-      # Published by fraud-investigation-swarm's PR #7 CI run (2026-10-03,
-      # 70af2ef: burst mode stamps fresh request ids per run and tolerates
-      # per-alert failures). Swap for a v0.1.0 tag once a real release is cut.
-      opsConsole: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:sha-bdc896656686
+      coreBankingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/core-banking-mcp:v0.1.0
+      watchlistMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/watchlist-mcp:v0.1.0
+      deviceRiskMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/device-risk-mcp:v0.1.0
+      typologyMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/typology-mcp:v0.1.0
+      opsConsole: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:v0.1.0
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
