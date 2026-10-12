@@ -406,8 +406,9 @@ export class Prompts {
   }
 
   /**
-   * Raw-mode multi-select with numbered [✔]/[ ] checkboxes.
-   * Space/Enter to toggle, Enter on last confirm confirms all, Ctrl+D to finish.
+   * Raw-mode multi-select with [✔]/[ ] checkboxes, windowed and filterable
+   * once the list exceeds WINDOW_THRESHOLD items.
+   * Space toggles, typing filters, Enter confirms, Ctrl+C exits.
    * @param {string} message
    * @param {Array<{name: string, value: *, checked?: boolean}>} choices
    * @returns {Promise<Array<*>>} Selected values
@@ -529,7 +530,10 @@ export class Prompts {
               continue;
             }
             if (isSeparator) {
-              const text = choice.separator || '';
+              // inquirer's Separator stores its label as `.line` on v9 and
+              // `.separator` on v13 - support both so this isn't silently
+              // blank depending on which major version is installed.
+              const text = choice.line || choice.separator || '';
               lines.push(text.trim() ? ` ${text}` : '');
             } else {
               const active = selectableIdx === pointer;
