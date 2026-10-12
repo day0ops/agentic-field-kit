@@ -91,9 +91,12 @@ export class FraudOpsConsoleFeature extends Feature {
     if (!this.image) throw new Error('fraud-ops-console: image is required');
     if (!this.hostname) throw new Error('fraud-ops-console: hostname is required');
     if (!this.clickhouseDsn) throw new Error('fraud-ops-console: clickhouseDsn is required');
-    if (!this.keycloak.hostname) throw new Error('fraud-ops-console: keycloak.hostname is required');
-    if (!this.keycloak.clientId) throw new Error('fraud-ops-console: keycloak.clientId is required');
-    if (!this.keycloak.clientSecret) throw new Error('fraud-ops-console: keycloak.clientSecret is required');
+    if (!this.keycloak.hostname)
+      throw new Error('fraud-ops-console: keycloak.hostname is required');
+    if (!this.keycloak.clientId)
+      throw new Error('fraud-ops-console: keycloak.clientId is required');
+    if (!this.keycloak.clientSecret)
+      throw new Error('fraud-ops-console: keycloak.clientSecret is required');
     return true;
   }
 
@@ -260,7 +263,10 @@ export class FraudOpsConsoleFeature extends Feature {
           port: 443,
           protocol: 'HTTPS',
           hostname: this.hostname,
-          tls: { mode: 'Terminate', certificateRefs: [{ kind: 'Secret', name: 'fraud-ops-console-tls' }] },
+          tls: {
+            mode: 'Terminate',
+            certificateRefs: [{ kind: 'Secret', name: 'fraud-ops-console-tls' }],
+          },
           allowedRoutes: { namespaces: { from: 'Same' } },
         },
       ],
@@ -300,7 +306,9 @@ export class FraudOpsConsoleFeature extends Feature {
         rules: [
           {
             matches: [{ path: { type: 'PathPrefix', value: '/' } }],
-            backendRefs: [{ group: '', kind: 'Service', name: 'fraud-ops-console', port: this.port }],
+            backendRefs: [
+              { group: '', kind: 'Service', name: 'fraud-ops-console', port: this.port },
+            ],
           },
         ],
       },
@@ -320,7 +328,10 @@ export class FraudOpsConsoleFeature extends Feature {
     if (gatewayParams) await this.applyResource(gatewayParams);
     await this.applyResource(this.buildGateway());
     await this.applyResource(this.buildHTTPRoute());
-    this.log(`fraud-ops-console deployed at https://${this.hostname} in '${this.namespace}'`, 'success');
+    this.log(
+      `fraud-ops-console deployed at https://${this.hostname} in '${this.namespace}'`,
+      'success'
+    );
   }
 
   async cleanup() {

@@ -5,7 +5,8 @@ describe('kagent-mcp-server', () => {
   const f = new KagentMcpServerFeature('kagent-mcp-server', {
     serverName: 'core-banking-mcp',
     namespace: 'kagent',
-    image: 'australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/core-banking-mcp:v0.1.0',
+    image:
+      'australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/core-banking-mcp:v0.1.0',
     port: 9110,
   });
 

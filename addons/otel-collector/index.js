@@ -75,10 +75,7 @@ export class OtelCollectorFeature extends AddonFeature {
     await this.installCollector();
     await this.waitForCollector();
 
-    this.log(
-      `OTel Collector installed successfully. Endpoint: ${this.endpoint}`,
-      'success'
-    );
+    this.log(`OTel Collector installed successfully. Endpoint: ${this.endpoint}`, 'success');
   }
 
   async addHelmRepo() {
@@ -101,7 +98,8 @@ export class OtelCollectorFeature extends AddonFeature {
       mode: 'deployment',
       replicaCount: 1,
       image: {
-        repository: 'ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib',
+        repository:
+          'ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib',
       },
       command: { name: 'otelcol-contrib' },
       config: {

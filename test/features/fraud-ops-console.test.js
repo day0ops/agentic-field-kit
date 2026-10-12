@@ -4,9 +4,11 @@ import { FraudOpsConsoleFeature } from '../../features/agentic/fraud-ops-console
 describe('fraud-ops-console', () => {
   const f = new FraudOpsConsoleFeature('fraud-ops-console', {
     namespace: 'kagent',
-    image: 'australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:v0.1.0',
+    image:
+      'australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:v0.1.0',
     hostname: 'console.agentic-demo-gke.kasunt.apac.fe.solo.io',
-    clickhouseDsn: 'tcp://default:password@kagent-clickhouse.kagent.svc.cluster.local:9000?database=kagent',
+    clickhouseDsn:
+      'tcp://default:password@kagent-clickhouse.kagent.svc.cluster.local:9000?database=kagent',
     keycloak: {
       hostname: 'keycloak.agentic-demo-gke.kasunt.apac.fe.solo.io',
       clientId: 'fraud-swarm-driver',
@@ -71,7 +73,10 @@ describe('fraud-ops-console', () => {
     });
     const params = gated.buildGatewayParameters();
     expect(params.apiVersion).toBe('enterpriseagentgateway.solo.io/v1alpha1');
-    expect(params.metadata).toEqual({ name: 'fraud-ops-console-https-params', namespace: 'kagent' });
+    expect(params.metadata).toEqual({
+      name: 'fraud-ops-console-https-params',
+      namespace: 'kagent',
+    });
     expect(params.spec.service.spec.loadBalancerSourceRanges).toEqual([
       '165.99.148.61/32',
       '64.226.138.86/32',
@@ -97,6 +102,10 @@ describe('fraud-ops-console', () => {
     expect(role.rules[0].resourceNames).toEqual(['ate-client']);
     const rb = f.buildAteTokenRoleBinding();
     expect(rb.metadata.namespace).toBe('ate-system');
-    expect(rb.subjects[0]).toEqual({ kind: 'ServiceAccount', name: 'fraud-ops-console', namespace: 'kagent' });
+    expect(rb.subjects[0]).toEqual({
+      kind: 'ServiceAccount',
+      name: 'fraud-ops-console',
+      namespace: 'kagent',
+    });
   });
 });

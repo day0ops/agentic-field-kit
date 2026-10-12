@@ -58,8 +58,7 @@ export async function generate(_subIndex, addonCfg, clusterName, profile, env) {
   const gwPort = gateway.port || 80;
   const gwProtocol = gateway.protocol || 'HTTP';
   const gwFrom = gateway.allowedRoutes?.namespaces?.from || 'All';
-  const gatewayApiVersion =
-    cfg.gatewayApiVersion || profile.spec?.gatewayApiVersion || 'v1.4.0';
+  const gatewayApiVersion = cfg.gatewayApiVersion || profile.spec?.gatewayApiVersion || 'v1.4.0';
   const soloUiNs = cfg.soloUiNamespace || '';
   const gwServiceType = gateway.serviceType || null;
   const additionalHostnames = gateway.additionalHostnames || [];
