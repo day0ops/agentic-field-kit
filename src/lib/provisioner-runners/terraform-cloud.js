@@ -80,6 +80,7 @@ const PROVIDER_CONFIGS = {
       }
       if (config.workloadStorageKsaName)
         vars.workload_storage_ksa_name = config.workloadStorageKsaName;
+      if (config.workloadStorageForceDestroy) vars.workload_storage_force_destroy = true;
       return vars;
     },
   },
@@ -113,6 +114,7 @@ const PROVIDER_CONFIGS = {
       }
       if (config.workloadStorageKsaName)
         vars.workload_storage_ksa_name = config.workloadStorageKsaName;
+      if (config.workloadStorageForceDestroy) vars.workload_storage_force_destroy = true;
       if (config.disableFilestoreCsi) vars.gke_disable_filestore_csi = true;
       if (config.nodeAutoUpgrade === false) vars.gke_node_auto_upgrade = false;
       // This environment only ever creates its own Cloud DNS zone -- it never reaches into
@@ -485,6 +487,7 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
       enableWorkloadStorage: provisioner.enable_workload_storage === true,
       workloadStorageKsaNamespace: provisioner.workload_storage_ksa_namespace || undefined,
       workloadStorageKsaName: provisioner.workload_storage_ksa_name || undefined,
+      workloadStorageForceDestroy: provisioner.workload_storage_force_destroy === true,
       disableFilestoreCsi: provisioner.disable_filestore_csi === true,
       nodeAutoUpgrade: provisioner.node_auto_upgrade === false ? false : undefined,
       aksServicePrincipal:

@@ -21,6 +21,7 @@ spec:
     # needs its own binding too -- it manages golden-snapshot Tags directly in the bucket;
     # without it, golden actors suspend and snapshot fine but their Agent never reaches Ready.
     enable_workload_storage: true
+    workload_storage_force_destroy: true
     workload_storage_ksa_namespace: ate-system
     workload_storage_ksa_name:
       - atelet
