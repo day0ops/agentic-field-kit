@@ -37,10 +37,14 @@ export class RunbookPicker {
     }
 
     const choices = [];
-    for (const [cat, usecases] of [...byCategory.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (const [cat, usecases] of [...byCategory.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0])
+    )) {
       if (choices.length > 0) choices.push(_gap());
       choices.push(_separator(humanize(cat)));
-      for (const u of [...usecases].sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))) {
+      for (const u of [...usecases].sort((a, b) =>
+        a.metadata.name.localeCompare(b.metadata.name)
+      )) {
         choices.push({ name: _choiceName(u.metadata.name), value: u.metadata.name });
       }
     }
