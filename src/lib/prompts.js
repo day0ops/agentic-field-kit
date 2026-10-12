@@ -4,6 +4,59 @@ import readline from 'readline';
 import fs from 'fs';
 import tty from 'tty';
 
+export const WINDOW_THRESHOLD = 30;
+export const MAX_VIEWPORT_SIZE = 25;
+
+/**
+ * How many terminal rows fit on screen at once, leaving room for header/footer
+ * chrome. Capped at MAX_VIEWPORT_SIZE even on a tall terminal, so a long list
+ * always reads as a scrollable window rather than a wall of text.
+ * @param {number} totalLines - total number of rendered lines that could be shown
+ * @param {number} terminalRows - process.stdout.rows (may be undefined/0 off-TTY)
+ * @param {number} overhead - lines reserved for header/footer/scroll indicators
+ * @returns {number}
+ */
+export function computeViewportSize(totalLines, terminalRows, overhead) {
+  const available = Math.max(10, (terminalRows || 24) - overhead);
+  return Math.min(totalLines, available, MAX_VIEWPORT_SIZE);
+}
+
+/**
+ * Edge-scrolled window offset: only moves when the active line would otherwise
+ * leave the visible window, rather than recentering on every keystroke.
+ * @param {number} scrollTop - current window start (a line offset)
+ * @param {number} activeLine - line offset the pointer's item now starts at
+ * @param {number} totalLines - total number of rendered lines
+ * @param {number} viewportSize - number of lines visible at once
+ * @returns {number}
+ */
+export function computeScrollTop(scrollTop, activeLine, totalLines, viewportSize) {
+  if (totalLines <= viewportSize) return 0;
+  let next = scrollTop;
+  if (activeLine < next) {
+    next = activeLine;
+  } else if (activeLine > next + viewportSize - 1) {
+    next = activeLine - viewportSize + 1;
+  }
+  return Math.max(0, Math.min(next, totalLines - viewportSize));
+}
+
+/**
+ * Indices into `selectable` whose name matches `query` (case-insensitive substring).
+ * @param {Array<{name: string}>} selectable
+ * @param {string} query
+ * @returns {number[]}
+ */
+export function filterChoiceIndices(selectable, query) {
+  if (!query) return selectable.map((_, i) => i);
+  const q = query.toLowerCase();
+  const indices = [];
+  selectable.forEach((choice, i) => {
+    if (String(choice.name).toLowerCase().includes(q)) indices.push(i);
+  });
+  return indices;
+}
+
 /**
  * Wait for the user to press Space or Enter before continuing.
  * No-ops when stdin is not a TTY (e.g. CI environments).
@@ -104,8 +157,24 @@ export class Prompts {
         }
       });
 
+      // Maps a selectable-array index to its position within `choices`, so the
+      // window can be computed over the full list (keeping separators attached
+      // to their group) while the pointer still only ever indexes `selectable`.
+      const choiceIndexOf = [];
+      {
+        let si = 0;
+        choices.forEach((c, i) => {
+          if (!(c instanceof inquirer.Separator) && c.type !== 'separator') {
+            choiceIndexOf[si] = i;
+            si++;
+          }
+        });
+      }
+
       let pointer = Math.min(defaultIndex, selectable.length - 1);
       let linesRendered = 0;
+      let scrollTop = 0;
+      const windowed = selectable.length > WINDOW_THRESHOLD;
 
       const cols = stdout.columns || 80;
       const maxLabel = cols - 4;
@@ -125,6 +194,34 @@ export class Prompts {
           stdout.write(`\x1B[${linesRendered}A\x1B[0J`);
         }
 
+        // Each choice can render as more than one terminal row (a name line
+        // plus any description bullet lines), so windowing has to operate on
+        // actual rendered rows, not on the `choices` array index. Otherwise a
+        // window of N choices with long descriptions could still overflow the
+        // terminal. Build the plain (uncolored) row content once per choice
+        // before deciding which rows fall inside the viewport.
+        const rowsFor = choices.map(choice => {
+          if (choice instanceof inquirer.Separator || choice.type === 'separator') {
+            return [{ kind: 'sep' }];
+          }
+          const rows = [{ kind: 'name', text: fit(choice.name) }];
+          if (choice.description) {
+            const descLines = choice.description.trim().split('\n');
+            for (const dl of descLines) {
+              const descText = fit(dl.trim(), 6); // 6 = '    • '.length
+              if (descText) rows.push({ kind: 'desc', text: descText });
+            }
+          }
+          return rows;
+        });
+
+        const rowOffsetOf = []; // choices-index -> starting row offset
+        let totalRows = 0;
+        rowsFor.forEach((rows, i) => {
+          rowOffsetOf[i] = totalRows;
+          totalRows += rows.length;
+        });
+
         const lines = [];
         lines.push(
           chalk.green('?') +
@@ -133,29 +230,44 @@ export class Prompts {
             chalk.yellow('  (enter/space to select' + (allowBack ? ', esc to go back' : '') + ')')
         );
 
+        let viewStart = 0;
+        let viewEnd = totalRows;
+        if (windowed) {
+          const viewportSize = computeViewportSize(totalRows, stdout.rows, 4);
+          const activeLine = rowOffsetOf[choiceIndexOf[pointer]];
+          scrollTop = computeScrollTop(scrollTop, activeLine, totalRows, viewportSize);
+          viewStart = scrollTop;
+          viewEnd = Math.min(totalRows, scrollTop + viewportSize);
+          if (viewStart > 0) lines.push(chalk.dim(`  ↑ ${viewStart} more above`));
+        }
+
         let itemIdx = 0;
-        for (const choice of choices) {
-          if (choice instanceof inquirer.Separator || choice.type === 'separator') {
-            lines.push(chalk.dim(' ────────────────'));
-          } else {
-            const active = itemIdx === pointer;
-            const name = fit(choice.name);
-            const prefix = active ? chalk.cyan('❯') : ' ';
-            const label = active ? chalk.cyan(name) : name;
-            lines.push(`${prefix} ${label}`);
-            if (choice.description) {
-              const descLines = choice.description.trim().split('\n');
-              for (const dl of descLines) {
-                const descText = fit(dl.trim(), 6); // 6 = '    • '.length
-                if (descText) {
-                  lines.push(
-                    active ? chalk.dim.cyan(`    • ${descText}`) : chalk.dim(`    • ${descText}`)
-                  );
-                }
-              }
+        for (let i = 0; i < choices.length; i++) {
+          const rows = rowsFor[i];
+          const start = rowOffsetOf[i];
+          const isSeparator = rows[0].kind === 'sep';
+          const active = itemIdx === pointer;
+          for (let ri = 0; ri < rows.length; ri++) {
+            const rowNo = start + ri;
+            if (rowNo < viewStart || rowNo >= viewEnd) continue;
+            const row = rows[ri];
+            if (row.kind === 'sep') {
+              lines.push(chalk.dim(' ────────────────'));
+            } else if (row.kind === 'name') {
+              const prefix = active ? chalk.cyan('❯') : ' ';
+              const label = active ? chalk.cyan(row.text) : row.text;
+              lines.push(`${prefix} ${label}`);
+            } else {
+              lines.push(
+                active ? chalk.dim.cyan(`    • ${row.text}`) : chalk.dim(`    • ${row.text}`)
+              );
             }
-            itemIdx++;
           }
+          if (!isSeparator) itemIdx++;
+        }
+
+        if (windowed && viewEnd < totalRows) {
+          lines.push(chalk.dim(`  ↓ ${totalRows - viewEnd} more below`));
         }
 
         stdout.write(lines.join('\n') + '\n');
@@ -290,17 +402,222 @@ export class Prompts {
    * @returns {Promise<Array<string>>} Selected values
    */
   static async multiSelect(message, choices) {
-    const answer = await inquirer.prompt([
-      {
-        type: 'checkbox',
-        name: 'selections',
-        message,
-        choices,
-        pageSize: 10,
-      },
-    ]);
+    return this._rawMultiSelect(message, choices);
+  }
 
-    return answer.selections;
+  /**
+   * Raw-mode multi-select with [✔]/[ ] checkboxes, windowed and filterable
+   * once the list exceeds WINDOW_THRESHOLD items.
+   * Space toggles, typing filters, Enter confirms, Ctrl+C exits.
+   * @param {string} message
+   * @param {Array<{name: string, value: *, checked?: boolean}>} choices
+   * @returns {Promise<Array<*>>} Selected values
+   */
+  static _rawMultiSelect(message, choices) {
+    return new Promise(resolve => {
+      const stdout = process.stdout;
+      const stdin = process.stdin;
+
+      if (!stdin.isTTY) {
+        const defaults = choices
+          .filter(c => !(c instanceof inquirer.Separator) && c.type !== 'separator' && c.checked)
+          .map(c => c.value);
+        resolve(defaults);
+        return;
+      }
+
+      const selectable = [];
+      choices.forEach(c => {
+        if (!(c instanceof inquirer.Separator) && c.type !== 'separator') {
+          selectable.push(c);
+        }
+      });
+
+      const checked = new Set(selectable.map((_, i) => i).filter(i => selectable[i].checked));
+      const filterable = selectable.length > WINDOW_THRESHOLD;
+
+      // Maps a selectable-array index to its position within `choices` (see
+      // _rawSelect for why: keeps separators attached to their group while
+      // windowing over the grouped, unfiltered view).
+      const choiceIndexOf = [];
+      {
+        let si = 0;
+        choices.forEach((c, i) => {
+          if (!(c instanceof inquirer.Separator) && c.type !== 'separator') {
+            choiceIndexOf[si] = i;
+            si++;
+          }
+        });
+      }
+
+      let filterQuery = '';
+      // Indices into `selectable` that match the current filter. `pointer`
+      // always indexes into `visible`, never directly into `selectable`, so
+      // checked state (keyed by selectable index) survives filtering.
+      let visible = selectable.map((_, i) => i);
+      let pointer = 0;
+      let scrollTop = 0;
+      let linesRendered = 0;
+
+      const applyFilter = () => {
+        visible = filterChoiceIndices(selectable, filterQuery);
+        pointer = Math.min(pointer, Math.max(0, visible.length - 1));
+        scrollTop = 0;
+      };
+
+      const render = () => {
+        if (linesRendered > 0) {
+          stdout.write(`\x1B[${linesRendered}A\x1B[0J`);
+        }
+
+        const lines = [];
+        const hint = filterable
+          ? 'space to toggle, type to filter, enter to confirm'
+          : 'space to toggle, enter to confirm';
+        lines.push(chalk.green('?') + ' ' + chalk.bold(message) + chalk.yellow(`  (${hint})`));
+        if (filterQuery) {
+          lines.push(chalk.dim(`  Filter: ${filterQuery}`));
+        }
+
+        if (visible.length === 0) {
+          lines.push(chalk.dim('  No matches'));
+        } else if (filterQuery) {
+          // Flat filtered view: no separators, window directly over `visible`.
+          // overhead: header + filter line + 2 scroll indicators + blank line + footer
+          const viewportSize = computeViewportSize(visible.length, stdout.rows, 6);
+          scrollTop = computeScrollTop(scrollTop, pointer, visible.length, viewportSize);
+          if (scrollTop > 0) lines.push(chalk.dim(`  ↑ ${scrollTop} more above`));
+          const viewEnd = Math.min(visible.length, scrollTop + viewportSize);
+          for (let vi = scrollTop; vi < viewEnd; vi++) {
+            const si = visible[vi];
+            const choice = selectable[si];
+            const active = vi === pointer;
+            const isChecked = checked.has(si);
+            const box = isChecked ? chalk.green('[✔]') : chalk.dim('[ ]');
+            const label = active ? chalk.cyan(choice.name) : choice.name;
+            const prefix = active ? chalk.cyan('❯') : ' ';
+            lines.push(`${prefix} ${box} ${label}`);
+          }
+          if (viewEnd < visible.length) {
+            lines.push(chalk.dim(`  ↓ ${visible.length - viewEnd} more below`));
+          }
+        } else {
+          // Grouped view: window over the full `choices` array so separators
+          // stay attached to their items.
+          const windowed = selectable.length > WINDOW_THRESHOLD;
+          let viewStart = 0;
+          let viewEnd = choices.length;
+          if (windowed) {
+            // overhead: header + filter line + 2 scroll indicators + blank line + footer
+            const viewportSize = computeViewportSize(choices.length, stdout.rows, 6);
+            scrollTop = computeScrollTop(
+              scrollTop,
+              choiceIndexOf[pointer],
+              choices.length,
+              viewportSize
+            );
+            viewStart = scrollTop;
+            viewEnd = Math.min(choices.length, scrollTop + viewportSize);
+            if (viewStart > 0) lines.push(chalk.dim(`  ↑ ${viewStart} more above`));
+          }
+
+          let selectableIdx = 0;
+          for (let i = 0; i < choices.length; i++) {
+            const choice = choices[i];
+            const isSeparator = choice instanceof inquirer.Separator || choice.type === 'separator';
+            if (i < viewStart || i >= viewEnd) {
+              if (!isSeparator) selectableIdx++;
+              continue;
+            }
+            if (isSeparator) {
+              // inquirer's Separator stores its label as `.line` on v9 and
+              // `.separator` on v13 - support both so this isn't silently
+              // blank depending on which major version is installed.
+              const text = choice.line || choice.separator || '';
+              lines.push(text.trim() ? ` ${text}` : '');
+            } else {
+              const active = selectableIdx === pointer;
+              const isChecked = checked.has(selectableIdx);
+              const box = isChecked ? chalk.green('[✔]') : chalk.dim('[ ]');
+              const label = active ? chalk.cyan(choice.name) : choice.name;
+              const prefix = active ? chalk.cyan('❯') : ' ';
+              lines.push(`${prefix} ${box} ${label}`);
+              selectableIdx++;
+            }
+          }
+
+          if (windowed && viewEnd < choices.length) {
+            lines.push(chalk.dim(`  ↓ ${choices.length - viewEnd} more below`));
+          }
+        }
+
+        lines.push('');
+        lines.push(chalk.dim('  Press enter when done'));
+        stdout.write(lines.join('\n') + '\n');
+        linesRendered = lines.length;
+      };
+
+      const finish = () => {
+        if (linesRendered > 0) {
+          stdout.write(`\x1B[${linesRendered}A\x1B[0J`);
+        }
+        const summary =
+          checked.size === 0 ? chalk.dim('none selected') : chalk.cyan(`${checked.size} selected`);
+        stdout.write(chalk.green('✔') + ' ' + chalk.bold(message) + ' ' + summary + '\n');
+        stdout.write('\x1B[?25h');
+        stdin.removeListener('keypress', onKeypress);
+        stdin.setRawMode(false);
+        stdin.pause();
+        resolve(selectable.filter((_, i) => checked.has(i)).map(c => c.value));
+      };
+
+      const onKeypress = (ch, key) => {
+        if (!key) return;
+
+        if (key.name === 'up' && visible.length > 0) {
+          pointer = (pointer - 1 + visible.length) % visible.length;
+          render();
+        } else if (key.name === 'down' && visible.length > 0) {
+          pointer = (pointer + 1) % visible.length;
+          render();
+        } else if (key.name === 'space') {
+          if (visible.length > 0) {
+            const si = visible[pointer];
+            if (checked.has(si)) {
+              checked.delete(si);
+            } else {
+              checked.add(si);
+            }
+            render();
+          }
+        } else if (key.name === 'return') {
+          finish();
+        } else if (key.name === 'backspace') {
+          if (filterable && filterQuery) {
+            filterQuery = filterQuery.slice(0, -1);
+            applyFilter();
+            render();
+          }
+        } else if (key.name === 'c' && key.ctrl) {
+          stdout.write('\x1B[?25h');
+          stdin.removeListener('keypress', onKeypress);
+          stdin.setRawMode(false);
+          stdin.pause();
+          process.exit(0);
+        } else if (filterable && ch && ch.length === 1 && !key.ctrl && !key.meta) {
+          filterQuery += ch;
+          applyFilter();
+          render();
+        }
+      };
+
+      readline.emitKeypressEvents(stdin);
+      stdin.setRawMode(true);
+      stdin.resume();
+      stdout.write('\x1B[?25l');
+      stdin.on('keypress', onKeypress);
+      render();
+    });
   }
 
   /**
