@@ -1,5 +1,6 @@
 // test/lib/runbook.test.js
 import { test, expect } from 'bun:test';
+import inquirer from 'inquirer';
 import { inferUsecaseScope } from '../../src/lib/runbook.js';
 
 test('inferUsecaseScope returns single-cluster for a 1-cluster infra profile', () => {
@@ -35,6 +36,42 @@ test('RunbookPicker exists and exports RunbookPicker class', () => {
   const picker = new RunbookPicker();
   expect(typeof picker.pick).toBe('function');
   expect(typeof picker.listProfiles).toBe('function');
+});
+
+function mockUsecaseFor(category, name) {
+  return {
+    _filePath: `config/usecases/single-cluster/${category}/${name}.yaml`,
+    metadata: { name },
+  };
+}
+
+test('RunbookPicker.buildUsecaseChoices groups usecases by category with separators', () => {
+  const choices = RunbookPicker.buildUsecaseChoices([
+    mockUsecaseFor('mcp', 'dynamic-mcp-server'),
+    mockUsecaseFor('mcp', 'auth-only-mcp'),
+    mockUsecaseFor('guardrail', 'bedrock-prompt-guards'),
+  ]);
+
+  // categories sorted alphabetically: guardrail, mcp
+  expect(choices[0]).toBeInstanceOf(inquirer.Separator);
+  expect(choices[1]).toEqual({ name: '  bedrock-prompt-guards', value: 'bedrock-prompt-guards' });
+  expect(choices[2]).toBeInstanceOf(inquirer.Separator); // gap
+  expect(choices[3]).toBeInstanceOf(inquirer.Separator); // mcp header
+  // usecases within a category sorted by name
+  expect(choices[4]).toEqual({ name: '  auth-only-mcp', value: 'auth-only-mcp' });
+  expect(choices[5]).toEqual({ name: '  dynamic-mcp-server', value: 'dynamic-mcp-server' });
+  expect(choices).toHaveLength(6);
+});
+
+test('RunbookPicker.buildUsecaseChoices returns no choices for an empty list', () => {
+  expect(RunbookPicker.buildUsecaseChoices([])).toEqual([]);
+});
+
+test('RunbookPicker.buildUsecaseChoices choices carry no description', () => {
+  const choices = RunbookPicker.buildUsecaseChoices([mockUsecaseFor('mcp', 'auth-only-mcp')]);
+  const leaf = choices.find(c => !(c instanceof inquirer.Separator));
+  expect(leaf).toEqual({ name: '  auth-only-mcp', value: 'auth-only-mcp' });
+  expect(leaf.description).toBeUndefined();
 });
 
 import { UseCaseAdapter } from '../../src/lib/runbook-adapters/usecase.js';

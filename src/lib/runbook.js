@@ -1,13 +1,52 @@
 // src/lib/runbook.js
 import inquirer from 'inquirer';
-const { Separator } = inquirer;
+import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
 import { load as yamlLoad } from 'js-yaml';
 import { glob } from 'glob';
 import { Prompts } from './prompts.js';
 
+function _choiceName(label) {
+  return '  ' + label;
+}
+
+function _separator(title) {
+  return new inquirer.Separator(chalk.bold.magenta(` ${title}`));
+}
+
+function _gap() {
+  return new inquirer.Separator(' ');
+}
+
 export class RunbookPicker {
+  /**
+   * Build a flat, category-grouped choice list for Prompts.multiSelect.
+   * @param {Array} allUsecases - usecases with `_filePath` set (see listUsecases)
+   * @returns {Array} choices, ready for Prompts.multiSelect
+   */
+  static buildUsecaseChoices(allUsecases) {
+    const humanize = s => s.replace(/-/g, ' ');
+    const getCategory = u => u._filePath.split('/')[3];
+
+    const byCategory = new Map();
+    for (const u of allUsecases) {
+      const cat = getCategory(u);
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat).push(u);
+    }
+
+    const choices = [];
+    for (const [cat, usecases] of [...byCategory.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (choices.length > 0) choices.push(_gap());
+      choices.push(_separator(humanize(cat)));
+      for (const u of [...usecases].sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))) {
+        choices.push({ name: _choiceName(u.metadata.name), value: u.metadata.name });
+      }
+    }
+    return choices;
+  }
+
   async pick(options = {}) {
     // 1. Load and filter profiles
     const profiles = await this.listProfiles();
@@ -32,8 +71,8 @@ export class RunbookPicker {
     const infraProfile = await this.loadInfraProfile(profile.spec.infra);
     const environment = await this.loadEnvironment(profile.spec.environment);
 
-    // 3. Use case selection — category → use cases funnel, pre-scoped to whichever topology
-    // (single-cluster vs multi-cluster) the selected profile's infra actually has. A
+    // 3. Use case selection — flat, category-grouped multiselect, pre-scoped to whichever
+    // topology (single-cluster vs multi-cluster) the selected profile's infra actually has. A
     // single-cluster profile can never satisfy a multi-cluster use case's spec.clusters, and
     // vice versa, so there's nothing to ask — it's fully determined by the profile's cluster
     // count, not a separate choice.
@@ -43,69 +82,13 @@ export class RunbookPicker {
     );
     let selectedUsecases = [];
     if (allUsecases.length > 0) {
-      const humanize = s => s.replace(/-/g, ' ');
-      const getPathParts = u => u._filePath.split('/'); // config/usecases/<scope>/<category>/...
-
       console.log(
-        `\nUse case scope: ${humanize(scope)} (inferred from ${infraProfile.spec?.clusters?.length || 0} cluster(s) in profile)`
+        `\nUse case scope: ${scope.replace(/-/g, ' ')} (inferred from ${infraProfile.spec?.clusters?.length || 0} cluster(s) in profile)`
       );
 
-      // Category → use cases loop — back to category, until done
-      const availableCategories = [...new Set(allUsecases.map(u => getPathParts(u)[3]))].sort();
-      const selectedNames = new Set();
-
-      while (true) {
-        const count = selectedNames.size;
-        const { selectedCategory } = await inquirer.prompt([
-          {
-            type: 'list',
-            name: 'selectedCategory',
-            message: `Select category${count > 0 ? ` (${count} use case${count > 1 ? 's' : ''} selected)` : ''}:`,
-            choices: [
-              ...availableCategories.map(c => ({ name: humanize(c), value: c })),
-              new Separator(),
-              { name: 'done', value: '__done__' },
-            ],
-          },
-        ]);
-
-        if (selectedCategory === '__done__') break;
-
-        const categoryFiltered = allUsecases.filter(u => getPathParts(u)[3] === selectedCategory);
-        const usecaseChoices = categoryFiltered.map(u => ({
-          name: `${u.metadata.name}  —  ${(u.metadata.description || '').split('\n')[0].trim()}`,
-          value: u.metadata.name,
-          checked: selectedNames.has(u.metadata.name),
-        }));
-
-        const { usecaseNames } = await inquirer.prompt([
-          {
-            type: 'checkbox',
-            name: 'usecaseNames',
-            message: `Select use cases from ${humanize(selectedCategory)}:`,
-            choices: usecaseChoices,
-          },
-        ]);
-
-        // Sync selections for this category (allow deselect on revisit)
-        for (const u of categoryFiltered) {
-          if (usecaseNames.includes(u.metadata.name)) selectedNames.add(u.metadata.name);
-          else selectedNames.delete(u.metadata.name);
-        }
-
-        // Show current selection summary
-        if (selectedNames.size === 0) {
-          console.log('\n  (none selected)\n');
-        } else {
-          console.log('');
-          for (const name of selectedNames) {
-            console.log(`  • ${name}`);
-          }
-          console.log('');
-        }
-      }
-
-      selectedUsecases = allUsecases.filter(u => selectedNames.has(u.metadata.name));
+      const choices = RunbookPicker.buildUsecaseChoices(allUsecases);
+      const selectedNames = await Prompts.multiSelect('Select use cases to include:', choices);
+      selectedUsecases = allUsecases.filter(u => selectedNames.includes(u.metadata.name));
     }
 
     // 4. Output config — always prefix today's date (local), stripping any existing date prefix
