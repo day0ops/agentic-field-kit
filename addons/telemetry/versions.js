@@ -18,12 +18,12 @@ export function resolveChartVersions({ version, chartVersions } = {}) {
   const overrides = chartVersions || {};
   return {
     'kube-prom-stack':
-      overrides['kube-prom-stack'] ||
-      overrides.prometheus ||
+      overrides['kube-prom-stack']?.version ||
+      overrides.prometheus?.version ||
       DEFAULT_CHART_VERSIONS['kube-prom-stack'],
-    loki: overrides.loki || DEFAULT_CHART_VERSIONS.loki,
-    tempo: overrides.tempo || DEFAULT_CHART_VERSIONS.tempo,
-    alloy: overrides.alloy || DEFAULT_CHART_VERSIONS.alloy,
-    otel: version || overrides.otel || DEFAULT_CHART_VERSIONS.otel,
+    loki: overrides.loki?.version || DEFAULT_CHART_VERSIONS.loki,
+    tempo: overrides.tempo?.version || DEFAULT_CHART_VERSIONS.tempo,
+    alloy: overrides.alloy?.version || DEFAULT_CHART_VERSIONS.alloy,
+    otel: version || overrides.otel?.version || DEFAULT_CHART_VERSIONS.otel,
   };
 }

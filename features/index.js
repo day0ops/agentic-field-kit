@@ -38,6 +38,8 @@ import { StagePolicyControllerFeature } from './agentic/stage-policy-controller/
 import { McpElicitationPolicyFeature } from './agentic/mcp-elicitation-policy/index.js';
 import { EntraOboPolicyFeature } from './agentic/entra-obo-policy/index.js';
 import { KagentMcpServerFeature } from './agentic/kagent-mcp-server/index.js';
+import { SubstrateAgentFeature } from './agentic/substrate-agent/index.js';
+import { FraudOpsConsoleFeature } from './agentic/fraud-ops-console/index.js';
 import { KagentAccessPolicyFeature } from './agentic/kagent-access-policy/index.js';
 import { AccessPolicyTestHarnessFeature } from './agentic/access-policy-test-harness/index.js';
 
@@ -92,6 +94,8 @@ FeatureManager.register('stage-policy-controller', StagePolicyControllerFeature)
 FeatureManager.register('mcp-elicitation-policy', McpElicitationPolicyFeature);
 FeatureManager.register('entra-obo-policy', EntraOboPolicyFeature);
 FeatureManager.register('kagent-mcp-server', KagentMcpServerFeature);
+FeatureManager.register('substrate-agent', SubstrateAgentFeature);
+FeatureManager.register('fraud-ops-console', FraudOpsConsoleFeature);
 FeatureManager.register('kagent-access-policy', KagentAccessPolicyFeature);
 FeatureManager.register('access-policy-test-harness', AccessPolicyTestHarnessFeature);
 
@@ -148,6 +152,8 @@ export { StagePolicyControllerFeature } from './agentic/stage-policy-controller/
 export { McpElicitationPolicyFeature } from './agentic/mcp-elicitation-policy/index.js';
 export { EntraOboPolicyFeature } from './agentic/entra-obo-policy/index.js';
 export { KagentMcpServerFeature } from './agentic/kagent-mcp-server/index.js';
+export { SubstrateAgentFeature } from './agentic/substrate-agent/index.js';
+export { FraudOpsConsoleFeature } from './agentic/fraud-ops-console/index.js';
 export { KagentAccessPolicyFeature } from './agentic/kagent-access-policy/index.js';
 export { AccessPolicyTestHarnessFeature } from './agentic/access-policy-test-harness/index.js';
 

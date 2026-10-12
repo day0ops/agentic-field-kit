@@ -47,7 +47,7 @@ function deepMerge(target, source) {
 function buildBaseValues(componentName, { istioRepo, istioTag, meshProfile, ns }) {
   switch (componentName) {
     case 'base':
-      return { defaultRevision: 'stable', profile: meshProfile };
+      return { profile: meshProfile };
     case 'istiod':
       return {
         global: { hub: istioRepo, tag: istioTag, proxy: { clusterDomain: 'cluster.local' } },
@@ -104,12 +104,13 @@ export class InstallAdapter {
   generateCertSetup(labNum, selection, extraSections = []) {
     const { profile, infraProfile } = selection;
     const mesh = profile.spec?.mesh || {};
+    const hasMesh = !!profile.spec?.mesh;
     const clusters = infraProfile.spec?.clusters || [];
     const isMultiCluster = clusters.length > 1;
     const certMode = mesh.certificates?.mode || 'self-signed';
 
     const sections = [];
-    if (isMultiCluster) {
+    if (hasMesh && isMultiCluster) {
       sections.push(this._certSection(certMode, clusters, 'istio-system'));
     }
     sections.push(...extraSections);
@@ -125,6 +126,7 @@ ${sections.join('\n\n')}`;
 
   generate(labNum, selection) {
     const { profile, infraProfile, environment } = selection;
+    if (!profile.spec?.mesh) return '';
     const mesh = profile.spec?.mesh || {};
     const clusters = infraProfile.spec?.clusters || [];
     const isMultiCluster = clusters.length > 1;
@@ -134,7 +136,7 @@ ${sections.join('\n\n')}`;
     const helmIstioRepo = mesh.image?.helmIstioRepo || 'us-docker.pkg.dev/soloio-img/istio-helm';
     const istioVersion = mesh.istioVersion || '';
     const istioTag = mesh.image?.tag || (istioVersion ? `${istioVersion}-solo` : '');
-    const gatewayApiVersion = mesh.gatewayApiVersion || 'v1.4.0';
+    const gatewayApiVersion = profile.spec?.gatewayApiVersion || 'v1.4.0';
     const meshProfile = mesh.profile || 'ambient';
     const peeringMethod = mesh.peering || 'helm';
 
@@ -521,6 +523,7 @@ ${clusters
 
   generateCleanupSections(labNum, selection, startIndex) {
     const { profile, infraProfile } = selection;
+    if (!profile.spec?.mesh) return [];
     const mesh = profile.spec?.mesh || {};
     const clusters = infraProfile.spec?.clusters || [];
     if (clusters.length === 0) return [];

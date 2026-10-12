@@ -520,7 +520,7 @@ export class AgentregistryFeature extends AddonFeature {
         '--set',
         'service.type=LoadBalancer',
         '--set-string',
-        `service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${this.hostname}`
+        `service.annotations.external-dns\\.kubernetes\\.io/hostname=${this.hostname}`
       );
       this.log(`Service: LoadBalancer with external-dns hostname ${this.hostname}`, 'info');
     }

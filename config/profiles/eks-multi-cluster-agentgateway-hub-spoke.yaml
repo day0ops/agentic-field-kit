@@ -11,10 +11,10 @@ metadata:
 spec:
   infra: eks-multi-cluster
   environment: aws-dev
+  gatewayApiVersion: v1.5.0
 
   mesh:
     istioVersion: 1.30.3
-    gatewayApiVersion: v1.5.0
     profile: ambient
     peering: helm
 
@@ -129,7 +129,7 @@ spec:
           - name: external-dns
             description: Automatic DNS record management via Route53
             namespace: external-dns
-            version: 1.21.1
+            version: '{{env.addons.external-dns.version}}'
             config:
               provider: route53
               domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
@@ -188,12 +188,7 @@ spec:
           - name: telemetry
             phase: post
             namespace: telemetry
-            chartVersions:
-              kube-prom-stack: 88.0.1
-              loki: 7.2.0
-              tempo: 1.61.3
-              alloy: 1.11.0
-              otel: 0.165.0
+            chartVersions: '{{env.addons.telemetry}}'
             config:
               database:
                 storageClass: gp3
@@ -269,9 +264,7 @@ spec:
           - name: telemetry
             phase: post
             namespace: telemetry
-            chartVersions:
-              alloy: 1.11.0
-              otel: 0.165.0
+            chartVersions: '{{env.addons.telemetry}}'
             config:
               mode: agent
               otelGatewayEndpoint: '{{env.internal.telemetry.otelGatewayEndpoint}}:4317'
@@ -328,7 +321,7 @@ spec:
 
       - name: cert-manager
         description: Certificate management for TLS
-        version: 1.20.2
+        version: '{{env.addons.cert-manager.version}}'
         namespace: cert-manager
         config:
           letsencrypt:

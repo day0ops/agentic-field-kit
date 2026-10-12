@@ -13,10 +13,7 @@ const VALID_SCALING_PROFILES = ['Default', 'Demo', 'Large'];
 const VALID_PEERING_METHODS = ['helm', 'declarative'];
 
 function validateMesh(mesh, errors) {
-  if (!mesh) {
-    errors.push('Missing required field: spec.mesh');
-    return;
-  }
+  if (!mesh) return;
 
   if (!mesh.istioVersion) {
     errors.push('Missing required field: spec.mesh.istioVersion');
@@ -266,6 +263,9 @@ export const ProfileSchema = {
     if (!profile.spec) {
       errors.push('Missing required field: spec');
     } else {
+      if (!profile.spec.mesh && !profile.spec.addons) {
+        errors.push('spec must define at least one of: mesh, addons');
+      }
       validateMesh(profile.spec.mesh, errors);
       validateAddons(profile.spec.addons, 'spec.addons', errors);
     }
@@ -277,8 +277,14 @@ export const ProfileSchema = {
     return profile.spec?.mesh || null;
   },
 
+  hasMesh(profile) {
+    return !!profile.spec?.mesh;
+  },
+
   getBaseComponents(profile) {
-    return profile.spec?.mesh?.components || [...DEFAULT_COMPONENTS];
+    const mesh = profile.spec?.mesh;
+    if (!mesh) return [];
+    return mesh.components || [...DEFAULT_COMPONENTS];
   },
 
   normalizeComponents(components) {
@@ -341,7 +347,7 @@ export const ProfileSchema = {
   },
 
   getGatewayApiVersion(profile) {
-    return profile.spec?.mesh?.gatewayApiVersion || null;
+    return profile.spec?.gatewayApiVersion || null;
   },
 
   getMeshProfile(profile) {

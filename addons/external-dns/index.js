@@ -1,10 +1,24 @@
 import { AddonFeature } from '../../src/lib/feature.js';
 import { KubernetesHelper, CommandRunner } from '../../src/lib/common.js';
 
-const EXTERNAL_DNS_VERSION = '1.21.1';
+const EXTERNAL_DNS_VERSION = '1.23.0';
 
 /**
- * Deploys external-dns for automatic DNS record management (AWS Route53 only).
+ * Deploys external-dns for automatic DNS record management (AWS Route53 or
+ * Google Cloud DNS).
+ *
+ * Configuration:
+ * {
+ *   provider: string,          // 'route53' (default) | 'google'
+ *   domainFilter: string,      // Required
+ *   txtOwnerId: string,        // Default: 'agentic-demo'
+ *   // route53 only:
+ *   region: string,            // Default: 'ap-southeast-2'
+ *   zoneId: string,            // Optional: --zone-id-filter
+ *   // google only:
+ *   project: string,           // Required (or GCP_PROJECT env var) -- GCP project the zone lives in
+ *   gcpServiceAccount: string, // GSA email for the Workload Identity annotation (ADC, no key file)
+ * }
  */
 export class ExternalDnsFeature extends AddonFeature {
   constructor(name, config) {
@@ -17,12 +31,21 @@ export class ExternalDnsFeature extends AddonFeature {
     this.namespace = config.namespace || 'external-dns';
     this.version = config.version || EXTERNAL_DNS_VERSION;
     this.kubeContext = config.kubeContext || null;
+    // Google Cloud DNS
+    this.project = config.project || process.env.GCP_PROJECT || null;
+    this.gcpServiceAccount = config.gcpServiceAccount || null;
   }
 
   validate() {
-    if (this.provider !== 'route53') {
+    if (!['route53', 'google'].includes(this.provider)) {
       throw new Error(
-        `DNS provider '${this.provider}' not yet supported. Only 'route53' is implemented.`
+        `DNS provider '${this.provider}' not yet supported. Supported: route53, google.`
+      );
+    }
+
+    if (this.provider === 'google' && !this.project) {
+      throw new Error(
+        'external-dns: project (or GCP_PROJECT environment variable) is required for provider=google'
       );
     }
 
@@ -49,12 +72,6 @@ export class ExternalDnsFeature extends AddonFeature {
       // repo might already exist
     }
 
-    // chart v1.14+ uses provider.name (not provider string); aws.region and aws.zoneType moved to env/extraArgs
-    const extraArgs = ['--aws-zone-type=public'];
-    if (this.zoneId) {
-      extraArgs.push(`--zone-id-filter=${this.zoneId}`);
-    }
-
     const helmArgs = [
       'upgrade',
       '-i',
@@ -67,12 +84,6 @@ export class ExternalDnsFeature extends AddonFeature {
       '--create-namespace',
       '--wait',
       '--set',
-      'provider.name=aws',
-      '--set',
-      'env[0].name=AWS_DEFAULT_REGION',
-      '--set',
-      `env[0].value=${this.region}`,
-      '--set',
       `domainFilters[0]=${this.domainFilter}`,
       '--set',
       `txtOwnerId=${this.txtOwnerId}`,
@@ -84,8 +95,35 @@ export class ExternalDnsFeature extends AddonFeature {
       'sources[1]=ingress',
       '--set',
       'sources[2]=gateway-httproute',
-      ...extraArgs.flatMap((arg, i) => ['--set', `extraArgs[${i}]=${arg}`]),
     ];
+
+    if (this.provider === 'google') {
+      helmArgs.push('--set', 'provider.name=google', '--set', `google.project=${this.project}`);
+      if (this.gcpServiceAccount) {
+        // Workload Identity: annotate the chart's KSA so pods assume the GSA via ADC, no key file.
+        // Dots in the annotation key must be escaped -- it's one literal key, not nested objects.
+        helmArgs.push(
+          '--set-string',
+          `serviceAccount.annotations.iam\\.gke\\.io/gcp-service-account=${this.gcpServiceAccount}`
+        );
+      }
+    } else {
+      // route53. chart v1.14+ uses provider.name (not provider string); aws.region and
+      // aws.zoneType moved to env/extraArgs.
+      const extraArgs = ['--aws-zone-type=public'];
+      if (this.zoneId) {
+        extraArgs.push(`--zone-id-filter=${this.zoneId}`);
+      }
+      helmArgs.push(
+        '--set',
+        'provider.name=aws',
+        '--set',
+        'env[0].name=AWS_DEFAULT_REGION',
+        '--set',
+        `env[0].value=${this.region}`,
+        ...extraArgs.flatMap((arg, i) => ['--set', `extraArgs[${i}]=${arg}`])
+      );
+    }
 
     if (this.kubeContext) {
       helmArgs.push('--kube-context', this.kubeContext);

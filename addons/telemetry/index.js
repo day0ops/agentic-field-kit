@@ -695,7 +695,7 @@ export class TelemetryFeature extends AddonFeature {
       ...(this.tempoHostname
         ? [
             '--set',
-            `queryFrontend.service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${this.tempoHostname}`,
+            `queryFrontend.service.annotations.external-dns\\.kubernetes\\.io/hostname=${this.tempoHostname}`,
           ]
         : []),
       ...(this.storageClass
@@ -755,7 +755,7 @@ export class TelemetryFeature extends AddonFeature {
       ...(this.lokiHostname
         ? [
             '--set',
-            `singleBinary.service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${this.lokiHostname}`,
+            `singleBinary.service.annotations.external-dns\\.kubernetes\\.io/hostname=${this.lokiHostname}`,
           ]
         : []),
       ...this.buildNodeSelectorArgs('singleBinary'),
@@ -857,13 +857,13 @@ export class TelemetryFeature extends AddonFeature {
     if (this.grafanaHostname) {
       helmArgs.push(
         '--set',
-        `grafana.service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${this.grafanaHostname}`
+        `grafana.service.annotations.external-dns\\.kubernetes\\.io/hostname=${this.grafanaHostname}`
       );
     }
     if (this.prometheusHostname) {
       helmArgs.push(
         '--set',
-        `prometheus.service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${this.prometheusHostname}`
+        `prometheus.service.annotations.external-dns\\.kubernetes\\.io/hostname=${this.prometheusHostname}`
       );
     }
 

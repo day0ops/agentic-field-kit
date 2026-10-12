@@ -78,7 +78,7 @@ test('keycloak runbook generate annotates the Service for external-dns when exte
   const profile = profileWith(['keycloak', 'external-dns']);
   const md = await keycloakRunbookGenerate(1, addonCfg, 'east', profile, { spec: {} });
   expect(md).toContain(
-    'kubectl annotate service keycloak -n keycloak "external-dns.alpha.kubernetes.io/hostname=$KEYCLOAK_HOSTNAME" --overwrite'
+    'kubectl annotate service keycloak -n keycloak "external-dns.kubernetes.io/hostname=$KEYCLOAK_HOSTNAME" --overwrite'
   );
 });
 
@@ -86,7 +86,7 @@ test('keycloak runbook generate omits the external-dns annotation step when exte
   const addonCfg = { namespace: 'keycloak', config: {} };
   const profile = profileWith(['keycloak']);
   const md = await keycloakRunbookGenerate(1, addonCfg, 'east', profile, { spec: {} });
-  expect(md).not.toContain('external-dns.alpha.kubernetes.io/hostname');
+  expect(md).not.toContain('external-dns.kubernetes.io/hostname');
 });
 
 test('keycloak runbook cleanup deletes the namespace only, not the full manifests', async () => {

@@ -8,31 +8,55 @@ const __dirname = dirname(__filename);
 const CONFIG_DIR = join(__dirname, 'config');
 
 // Helm chart version
-const CERT_MANAGER_VERSION = 'v1.19.3';
-const CERT_MANAGER_CHART_VERSION = '1.19.3';
+const CERT_MANAGER_CHART_VERSION = '1.20.2';
 
 /**
  * Installs cert-manager (CRDs, controller, webhook, cainjector) for TLS certificate
- * management. Optionally creates a Let's Encrypt DNS-01 (Route53) ClusterIssuer.
+ * management. Optionally creates a Let's Encrypt DNS-01 (Route53 or Google Cloud DNS)
+ * ClusterIssuer.
  * https://cert-manager.io/docs/installation/helm/
+ *
+ * letsencrypt config:
+ * {
+ *   enabled: boolean,
+ *   staging: boolean,
+ *   email: string,
+ *   provider: string,          // 'route53' (default) | 'clouddns'
+ *   region: string,            // route53 only. Default: 'us-east-1'
+ *   project: string,           // clouddns only. Required (or GCP_PROJECT env var)
+ *   gcpServiceAccount: string, // clouddns only -- GSA email for the Workload Identity
+ *                              // annotation on the controller's ServiceAccount (ADC, no key file)
+ * }
  */
 export class CertManagerFeature extends AddonFeature {
   constructor(name, config) {
     super(name, config);
+    this.chartVersion = config.version || CERT_MANAGER_CHART_VERSION;
     this.certManagerNamespace = config.certManagerNamespace || 'cert-manager';
     this.shouldInstallCRDs = config.installCRDs !== false;
     this.webhookEnabled = config.webhook?.enabled !== false;
     this.cainjectorEnabled = config.cainjector?.enabled !== false;
-    // Let's Encrypt DNS-01 issuer config (for Route53)
+    // Let's Encrypt DNS-01 issuer config
     this.letsencryptEnabled = config.letsencrypt?.enabled === true;
     this.letsencryptStaging = config.letsencrypt?.staging === true;
     this.letsencryptEmail = config.letsencrypt?.email || '';
+    this.letsencryptProvider = config.letsencrypt?.provider || 'route53';
     this.letsencryptRegion = config.letsencrypt?.region || 'us-east-1';
+    this.letsencryptProject = config.letsencrypt?.project || process.env.GCP_PROJECT || null;
+    this.gcpServiceAccount = config.letsencrypt?.gcpServiceAccount || null;
     this.kubeContext = config.kubeContext || null;
   }
 
   validate() {
-    // All configuration is optional
+    if (
+      this.letsencryptEnabled &&
+      this.letsencryptProvider === 'clouddns' &&
+      !this.letsencryptProject
+    ) {
+      throw new Error(
+        'cert-manager: letsencrypt.project (or GCP_PROJECT environment variable) is required for letsencrypt.provider=clouddns'
+      );
+    }
     return true;
   }
 
@@ -65,7 +89,7 @@ export class CertManagerFeature extends AddonFeature {
   async installCRDs() {
     this.log('Installing cert-manager CRDs...', 'info');
 
-    const crdUrl = `https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.crds.yaml`;
+    const crdUrl = `https://github.com/cert-manager/cert-manager/releases/download/v${this.chartVersion}/cert-manager.crds.yaml`;
     const ctxArgs = this.kubeContext ? [`--context=${this.kubeContext}`] : [];
 
     try {
@@ -105,7 +129,7 @@ export class CertManagerFeature extends AddonFeature {
       '-n',
       this.certManagerNamespace,
       '--version',
-      CERT_MANAGER_CHART_VERSION,
+      this.chartVersion,
       '--create-namespace',
       '--wait',
       '--timeout',
@@ -127,6 +151,16 @@ export class CertManagerFeature extends AddonFeature {
 
     if (!this.cainjectorEnabled) {
       helmArgs.push('--set', 'cainjector.enabled=false');
+    }
+
+    if (this.letsencryptProvider === 'clouddns' && this.gcpServiceAccount) {
+      // Workload Identity: annotate the controller's KSA so it assumes the GSA via ADC
+      // for the Cloud DNS DNS-01 solver -- no key file. Dots in the annotation key must
+      // be escaped -- it's one literal key, not nested objects.
+      helmArgs.push(
+        '--set-string',
+        `serviceAccount.annotations.iam\\.gke\\.io/gcp-service-account=${this.gcpServiceAccount}`
+      );
     }
 
     if (this.kubeContext) {
@@ -214,8 +248,9 @@ export class CertManagerFeature extends AddonFeature {
   }
 
   /**
-   * Create Let's Encrypt DNS-01 ClusterIssuer for Route53. Requires IRSA on the
-   * cert-manager service account.
+   * Create Let's Encrypt DNS-01 ClusterIssuer for Route53 (IRSA) or Google Cloud DNS
+   * (Workload Identity). Both use ambient cloud credentials on the controller's
+   * ServiceAccount -- no explicit keys/secrets in either solver.
    */
   async createLetsEncryptDnsIssuer() {
     const acmeServer = this.letsencryptStaging
@@ -224,6 +259,11 @@ export class CertManagerFeature extends AddonFeature {
     const envLabel = this.letsencryptStaging ? ' (staging)' : '';
 
     this.log(`Creating Let's Encrypt DNS-01 ClusterIssuer${envLabel}...`, 'info');
+
+    const dns01 =
+      this.letsencryptProvider === 'clouddns'
+        ? { cloudDNS: { project: this.letsencryptProject } }
+        : { route53: { region: this.letsencryptRegion } };
 
     const issuer = {
       apiVersion: 'cert-manager.io/v1',
@@ -237,16 +277,7 @@ export class CertManagerFeature extends AddonFeature {
           server: acmeServer,
           email: this.letsencryptEmail,
           privateKeySecretRef: { name: 'letsencrypt-dns' },
-          solvers: [
-            {
-              dns01: {
-                route53: {
-                  region: this.letsencryptRegion,
-                  // Uses IRSA - no explicit credentials needed
-                },
-              },
-            },
-          ],
+          solvers: [{ dns01 }],
         },
       },
     };

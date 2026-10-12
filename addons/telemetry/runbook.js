@@ -353,7 +353,7 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
   --set-string "grafana.sidecar.datasources.reloadURL=http://$GRAFANA_ADMIN_USERNAME:$GRAFANA_ADMIN_PASSWORD@localhost:3000/api/admin/provisioning/datasources/reload" \\
   --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName=${storageClass} \\
   --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=${storageSize} \\
-  --set "grafana.service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${grafanaHostnameRef}" \\
+  --set "grafana.service.annotations.external-dns\\.kubernetes\\.io/hostname=${grafanaHostnameRef}" \\
   --create-namespace \\
   --wait \\
   --timeout 10m \\

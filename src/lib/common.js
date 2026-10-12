@@ -872,6 +872,7 @@ export function nlbSourceRangeAnnotations(sourceRanges) {
   const ranges = (Array.isArray(sourceRanges) ? sourceRanges : [sourceRanges])
     .flat()
     .filter(Boolean);
+  if (ranges.length === 0) return null;
   return {
     'service.beta.kubernetes.io/aws-load-balancer-type': 'external',
     'service.beta.kubernetes.io/aws-load-balancer-nlb-target-type': 'ip',

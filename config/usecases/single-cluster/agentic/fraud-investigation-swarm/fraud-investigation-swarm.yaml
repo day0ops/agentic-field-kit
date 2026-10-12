@@ -1,0 +1,156 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: fraud-investigation-swarm
+  description: Give every fraud alert its own gVisor-isolated investigation swarm on Agent Substrate
+
+spec:
+  infra: gke-single-cluster-substrate
+  category: agentic
+
+  features:
+    - name: kagent-mcp-server
+      description: Core-banking MCP (customer/account/transaction lookups)
+      config:
+        serverName: core-banking-mcp
+        namespace: kagent-system
+        image: '{{env.images.fraudSwarm.coreBankingMcp}}'
+        port: 9110
+    - name: kagent-mcp-server
+      description: Watchlist MCP (sanctions + PEP screening)
+      config:
+        serverName: watchlist-mcp
+        namespace: kagent-system
+        image: '{{env.images.fraudSwarm.watchlistMcp}}'
+        port: 9111
+    - name: kagent-mcp-server
+      description: Device-risk MCP (device signals + IP/geo risk)
+      config:
+        serverName: device-risk-mcp
+        namespace: kagent-system
+        image: '{{env.images.fraudSwarm.deviceRiskMcp}}'
+        port: 9112
+    - name: kagent-mcp-server
+      description: Typology MCP (fraud/AML typology matching)
+      config:
+        serverName: typology-mcp
+        namespace: kagent-system
+        image: '{{env.images.fraudSwarm.typologyMcp}}'
+        port: 9113
+
+    - name: substrate-agent
+      description: Six-agent fraud investigation swarm on a shared Substrate worker pool
+      config:
+        name: fraud-swarm
+        namespace: kagent-system
+        image: '{{env.images.kagentHarness}}'
+        workerPoolName: fraud-workers
+        # Must match the substrate chart version (env.substrate.version) exactly -- see
+        # addons/kagent/index.js's own derivation for the default kagent-default pool.
+        workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateom-gvisor:v{{env.substrate.version}}'
+        workerPoolReplicas: 2
+        modelConfigRef: default-model-config
+        snapshots:
+          bucket: '{{infra.clusters.demo.storage.bucket}}'
+        agents:
+          - name: fraud-lead-investigator
+            description: Leads the case and produces the disposition
+            systemPrompt: >-
+              You are the lead fraud investigator. You have no knowledge of this case except
+              through your specialist tools -- you MUST call all four specialists before answering,
+              in this order: (1) tx-analyst for the account and transaction history, (2)
+              sanctions-screener with the exact counterparty name(s) tx-analyst reported, (3)
+              device-geo-risk for device and IP/geo signals, (4) typology-matcher with the
+              indicators these findings suggest. Wait for each specialist's real result before
+              calling the next. Never state a finding you did not receive from a tool call, and
+              never guess a counterparty name, list hit, device detail, or typology -- if you have
+              not called a specialist yet, you do not know the answer. Once you have all four
+              specialists' real findings, produce a disposition of CLEAR or ESCALATE citing the
+              specific facts each one returned, then call case-narrator to write up the case.
+            tools:
+              - agent: tx-analyst
+                description: Pull and summarize account and transaction history
+              - agent: sanctions-screener
+                description: Screen counterparties against sanctions and PEP lists
+              - agent: device-geo-risk
+                description: Assess device fingerprint and IP/geo risk
+              - agent: typology-matcher
+                description: Match the case against known fraud typologies
+              - agent: case-narrator
+                description: Write the human-readable case summary and recommended action
+          - name: tx-analyst
+            description: Summarizes account and transaction history
+            systemPrompt: >-
+              You have no knowledge of this customer's accounts or transactions except through your
+              tools. You MUST call the core-banking tools before answering -- never assume or guess
+              a counterparty name, amount, or country. Report exactly what the tools returned:
+              account details and every transaction (id, amount, currency, direction, exact
+              counterparty name, counterparty country, channel), highlighting any that are large,
+              cross-border, to a new payee, or part of a rapid sequence.
+            tools:
+              - mcp: core-banking-mcp
+          - name: sanctions-screener
+            description: Screens counterparties against sanctions and PEP lists
+            systemPrompt: >-
+              You have no knowledge of any sanctions or PEP list except through your tools. You MUST
+              call the watchlist tools to screen every counterparty name you are given -- never
+              assume or guess a hit or a clean result. Report exactly what the tools returned for
+              each name: hit or no hit, and for any hit, the exact list name, match type, and
+              program.
+            tools:
+              - mcp: watchlist-mcp
+          - name: device-geo-risk
+            description: Assesses device and IP/geo risk
+            systemPrompt: >-
+              You have no knowledge of this customer's devices or IP history except through your
+              tools. You MUST call the device-risk tools before answering -- never assume or guess a
+              device id, IP, geo, or risk score. Report exactly what the tools returned: device
+              signals (device id, new-device flag, IP risk score, location velocity) and IP geo/risk
+              for any IP involved, flagging new devices, high IP risk, and impossible travel.
+            tools:
+              - mcp: device-risk-mcp
+          - name: typology-matcher
+            description: Matches the case against fraud/AML typologies
+            systemPrompt: >-
+              You have no knowledge of fraud/AML typologies except through your tool. You MUST call
+              the typology tool with the indicators you were given (or the alert's suspected
+              typology ids) before answering -- never assume or guess a typology match. Report
+              exactly what the tool returned: the matched typologies, their descriptions, and their
+              indicators.
+            tools:
+              - mcp: typology-mcp
+          - name: case-narrator
+            description: Writes the case summary and recommended action
+            systemPrompt: >-
+              You write the final case narrative from the lead investigator's findings and
+              disposition only -- never add a fact, name, or number that was not given to you.
+              Write a concise, audit-friendly summary and a recommended action.
+
+    - name: fraud-ops-console
+      description: Fraud Ops Console (swarm view, density header, trigger controls)
+      config:
+        namespace: kagent-system
+        image: '{{env.images.fraudSwarm.opsConsole}}'
+        hostname: '{{env.domains.core.fraudOpsConsole}}'
+        sourceRanges: '{{env.security.vpnSourceRanges}}'
+        clickhouseDsn: 'tcp://default:password@kagent-clickhouse.kagent-system.svc.cluster.local:9000?database=kagent'
+        keycloak:
+          hostname: '{{env.domains.core.keycloak}}'
+          clientId: fraud-swarm-driver
+          clientSecret: fraud-swarm-driver-secret
+
+  tests:
+    - name: swarm-ready
+      description: Verify the lead investigator's AgentTemplate reconciles to Ready against the fraud-swarm Harness
+      steps:
+        - action: exec
+          # No Agent CRD in this architecture generation (kagent 1.0.0-alpha5): readiness lives
+          # on each AgentTemplate, per admitting Harness (status.harnesses[], keyed by harness
+          # name -- see substrate-agent's class doc comment). Only the entry-point template
+          # (fraud-lead-investigator) matters here; specialists are reachable only via its
+          # `agent` tool bindings and compile under its own revision.
+          command: kubectl wait agenttemplate/fraud-lead-investigator -n kagent-system --for=jsonpath='{.status.harnesses[?(@.harness=="fraud-swarm")].conditions[?(@.type=="Ready")].status}'=True --timeout=300s
+          timeout: 310s
+        - action: verify
+          expect:
+            exitCode: 0

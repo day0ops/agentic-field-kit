@@ -8,10 +8,10 @@ metadata:
 spec:
   infra: eks-single-cluster
   environment: aws-dev
+  gatewayApiVersion: v1.5.0
 
   mesh:
     istioVersion: 1.30.3
-    gatewayApiVersion: v1.5.0
     profile: ambient
 
     image:
