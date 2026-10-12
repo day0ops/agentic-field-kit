@@ -61,7 +61,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
     `  --version $AGENTREGISTRY_VERSION`,
     `  --set-string licensing.licenseKey="$ENTERPRISE_AGENTREGISTRY_LICENSE"`,
     `  --set service.type=LoadBalancer`,
-    `  --set-string "service.annotations.external-dns\\.alpha\\.kubernetes\\.io/hostname=${hostname}"`,
+    `  --set-string "service.annotations.external-dns\\.kubernetes\\.io/hostname=${hostname}"`,
     ...(oidc.clientId
       ? [
           `  --set oidc.issuer="${oidcIssuer}"`,

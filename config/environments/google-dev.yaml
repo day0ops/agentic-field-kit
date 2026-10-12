@@ -32,6 +32,23 @@ spec:
   okta:
     domain: integrator-1335842.okta.com
 
+  addons:
+    cert-manager:
+      version: 1.20.2
+    external-dns:
+      version: 1.23.0
+    telemetry:
+      kube-prom-stack:
+        version: 88.0.1
+      loki:
+        version: 7.2.0
+      tempo:
+        version: 1.61.3
+      alloy:
+        version: 1.11.0
+      otel:
+        version: 0.165.0
+
   # CIDR allowlist applied to public-facing GCP LoadBalancers (spec.loadBalancerSourceRanges).
   # Checkpoint Harmony SASE documented egress range.
   security:
@@ -40,8 +57,9 @@ spec:
       - 64.226.138.86/32
 
   keycloak:
+    image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.4
     scheme: https
-    image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.3
+    loginTheme: keycloak-soloio-login-theme
 
   agentregistry:
     scheme: https
@@ -49,7 +67,7 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.2
+    version: v2026.9.3
 
   kagent:
     scheme: https

@@ -8,8 +8,7 @@ const __dirname = dirname(__filename);
 const CONFIG_DIR = join(__dirname, 'config');
 
 // Helm chart version
-const CERT_MANAGER_VERSION = 'v1.19.3';
-const CERT_MANAGER_CHART_VERSION = '1.19.3';
+const CERT_MANAGER_CHART_VERSION = '1.20.2';
 
 /**
  * Installs cert-manager (CRDs, controller, webhook, cainjector) for TLS certificate
@@ -32,6 +31,7 @@ const CERT_MANAGER_CHART_VERSION = '1.19.3';
 export class CertManagerFeature extends AddonFeature {
   constructor(name, config) {
     super(name, config);
+    this.chartVersion = config.version || CERT_MANAGER_CHART_VERSION;
     this.certManagerNamespace = config.certManagerNamespace || 'cert-manager';
     this.shouldInstallCRDs = config.installCRDs !== false;
     this.webhookEnabled = config.webhook?.enabled !== false;
@@ -89,7 +89,7 @@ export class CertManagerFeature extends AddonFeature {
   async installCRDs() {
     this.log('Installing cert-manager CRDs...', 'info');
 
-    const crdUrl = `https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.crds.yaml`;
+    const crdUrl = `https://github.com/cert-manager/cert-manager/releases/download/v${this.chartVersion}/cert-manager.crds.yaml`;
     const ctxArgs = this.kubeContext ? [`--context=${this.kubeContext}`] : [];
 
     try {
@@ -129,7 +129,7 @@ export class CertManagerFeature extends AddonFeature {
       '-n',
       this.certManagerNamespace,
       '--version',
-      CERT_MANAGER_CHART_VERSION,
+      this.chartVersion,
       '--create-namespace',
       '--wait',
       '--timeout',

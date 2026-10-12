@@ -912,7 +912,7 @@ export class KeycloakFeature extends AddonFeature {
           );
           if (listResult.exitCode !== 0) {
             throw new Error(
-              `could not reach Keycloak to list groups (curl exit ${listResult.exitCode})`
+              `${listResult.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to list groups (curl exit ${listResult.exitCode})`
             );
           }
           let allGroups = [];
@@ -1803,7 +1803,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to list client scopes (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to list client scopes (curl exit ${result.exitCode})`
       );
     }
     try {
@@ -1822,7 +1822,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to list client profiles (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to list client profiles (curl exit ${result.exitCode})`
       );
     }
     let profiles = [];
@@ -1855,7 +1855,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to list client profiles (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to list client profiles (curl exit ${result.exitCode})`
       );
     }
     try {
@@ -1874,7 +1874,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to list client policies (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to list client policies (curl exit ${result.exitCode})`
       );
     }
     let policies = [];
@@ -1916,7 +1916,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to list client policies (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to list client policies (curl exit ${result.exitCode})`
       );
     }
     try {
@@ -2349,7 +2349,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to look up client '${clientId}' (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to look up client '${clientId}' (curl exit ${result.exitCode})`
       );
     }
     if (!result.stdout) return null;
@@ -2497,7 +2497,7 @@ export class KeycloakFeature extends AddonFeature {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        `could not reach Keycloak to look up user '${username}' (curl exit ${result.exitCode})`
+        `${result.exitCode === 22 ? 'Keycloak returned an error' : 'could not reach Keycloak'} to look up user '${username}' (curl exit ${result.exitCode})`
       );
     }
     if (!result.stdout) return null;

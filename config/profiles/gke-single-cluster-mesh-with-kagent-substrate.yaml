@@ -13,7 +13,7 @@ spec:
   addons:
     - name: cert-manager
       description: TLS certificate management (Let's Encrypt via Google Cloud DNS)
-      version: 1.20.2
+      version: '{{env.addons.cert-manager.version}}'
       namespace: cert-manager
       config:
         letsencrypt:
@@ -24,7 +24,7 @@ spec:
 
     - name: external-dns
       description: Automatic DNS record management via Google Cloud DNS
-      version: 1.23.0
+      version: '{{env.addons.external-dns.version}}'
       namespace: external-dns
       config:
         provider: google
