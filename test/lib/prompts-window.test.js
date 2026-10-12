@@ -4,6 +4,7 @@ import {
   MAX_VIEWPORT_SIZE,
   computeViewportSize,
   computeScrollTop,
+  filterChoiceIndices,
 } from '../../src/lib/prompts.js';
 
 describe('WINDOW_THRESHOLD', () => {
@@ -61,5 +62,27 @@ describe('computeScrollTop', () => {
 
   test('clamps so the window never scrolls past the end of the list', () => {
     expect(computeScrollTop(85, 99, 100, 10)).toBe(90);
+  });
+});
+
+describe('filterChoiceIndices', () => {
+  const selectable = [
+    { name: 'mcp-guardrails' },
+    { name: 'rate-limit' },
+    { name: 'mcp-eager-auth-okta' },
+    { name: 'OPA Authz' },
+  ];
+
+  test('returns all indices in order when the query is empty', () => {
+    expect(filterChoiceIndices(selectable, '')).toEqual([0, 1, 2, 3]);
+  });
+
+  test('matches a substring anywhere in the name, case-insensitively', () => {
+    expect(filterChoiceIndices(selectable, 'mcp')).toEqual([0, 2]);
+    expect(filterChoiceIndices(selectable, 'opa')).toEqual([3]);
+  });
+
+  test('returns an empty array when nothing matches', () => {
+    expect(filterChoiceIndices(selectable, 'nonexistent')).toEqual([]);
   });
 });
