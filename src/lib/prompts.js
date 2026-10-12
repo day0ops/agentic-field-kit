@@ -4,6 +4,43 @@ import readline from 'readline';
 import fs from 'fs';
 import tty from 'tty';
 
+export const WINDOW_THRESHOLD = 30;
+export const MAX_VIEWPORT_SIZE = 25;
+
+/**
+ * How many terminal rows fit on screen at once, leaving room for header/footer
+ * chrome. Capped at MAX_VIEWPORT_SIZE even on a tall terminal, so a long list
+ * always reads as a scrollable window rather than a wall of text.
+ * @param {number} totalLines - total number of rendered lines that could be shown
+ * @param {number} terminalRows - process.stdout.rows (may be undefined/0 off-TTY)
+ * @param {number} overhead - lines reserved for header/footer/scroll indicators
+ * @returns {number}
+ */
+export function computeViewportSize(totalLines, terminalRows, overhead) {
+  const available = Math.max(10, (terminalRows || 24) - overhead);
+  return Math.min(totalLines, available, MAX_VIEWPORT_SIZE);
+}
+
+/**
+ * Edge-scrolled window offset: only moves when the active line would otherwise
+ * leave the visible window, rather than recentering on every keystroke.
+ * @param {number} scrollTop - current window start (a line offset)
+ * @param {number} activeLine - line offset the pointer's item now starts at
+ * @param {number} totalLines - total number of rendered lines
+ * @param {number} viewportSize - number of lines visible at once
+ * @returns {number}
+ */
+export function computeScrollTop(scrollTop, activeLine, totalLines, viewportSize) {
+  if (totalLines <= viewportSize) return 0;
+  let next = scrollTop;
+  if (activeLine < next) {
+    next = activeLine;
+  } else if (activeLine > next + viewportSize - 1) {
+    next = activeLine - viewportSize + 1;
+  }
+  return Math.max(0, Math.min(next, totalLines - viewportSize));
+}
+
 /**
  * Wait for the user to press Space or Enter before continuing.
  * No-ops when stdin is not a TTY (e.g. CI environments).
@@ -104,8 +141,24 @@ export class Prompts {
         }
       });
 
+      // Maps a selectable-array index to its position within `choices`, so the
+      // window can be computed over the full list (keeping separators attached
+      // to their group) while the pointer still only ever indexes `selectable`.
+      const choiceIndexOf = [];
+      {
+        let si = 0;
+        choices.forEach((c, i) => {
+          if (!(c instanceof inquirer.Separator) && c.type !== 'separator') {
+            choiceIndexOf[si] = i;
+            si++;
+          }
+        });
+      }
+
       let pointer = Math.min(defaultIndex, selectable.length - 1);
       let linesRendered = 0;
+      let scrollTop = 0;
+      const windowed = selectable.length > WINDOW_THRESHOLD;
 
       const cols = stdout.columns || 80;
       const maxLabel = cols - 4;
@@ -125,6 +178,34 @@ export class Prompts {
           stdout.write(`\x1B[${linesRendered}A\x1B[0J`);
         }
 
+        // Each choice can render as more than one terminal row (a name line
+        // plus any description bullet lines), so windowing has to operate on
+        // actual rendered rows, not on the `choices` array index. Otherwise a
+        // window of N choices with long descriptions could still overflow the
+        // terminal. Build the plain (uncolored) row content once per choice
+        // before deciding which rows fall inside the viewport.
+        const rowsFor = choices.map(choice => {
+          if (choice instanceof inquirer.Separator || choice.type === 'separator') {
+            return [{ kind: 'sep' }];
+          }
+          const rows = [{ kind: 'name', text: fit(choice.name) }];
+          if (choice.description) {
+            const descLines = choice.description.trim().split('\n');
+            for (const dl of descLines) {
+              const descText = fit(dl.trim(), 6); // 6 = '    • '.length
+              if (descText) rows.push({ kind: 'desc', text: descText });
+            }
+          }
+          return rows;
+        });
+
+        const rowOffsetOf = []; // choices-index -> starting row offset
+        let totalRows = 0;
+        rowsFor.forEach((rows, i) => {
+          rowOffsetOf[i] = totalRows;
+          totalRows += rows.length;
+        });
+
         const lines = [];
         lines.push(
           chalk.green('?') +
@@ -133,29 +214,44 @@ export class Prompts {
             chalk.yellow('  (enter/space to select' + (allowBack ? ', esc to go back' : '') + ')')
         );
 
+        let viewStart = 0;
+        let viewEnd = totalRows;
+        if (windowed) {
+          const viewportSize = computeViewportSize(totalRows, stdout.rows, 4);
+          const activeLine = rowOffsetOf[choiceIndexOf[pointer]];
+          scrollTop = computeScrollTop(scrollTop, activeLine, totalRows, viewportSize);
+          viewStart = scrollTop;
+          viewEnd = Math.min(totalRows, scrollTop + viewportSize);
+          if (viewStart > 0) lines.push(chalk.dim(`  ↑ ${viewStart} more above`));
+        }
+
         let itemIdx = 0;
-        for (const choice of choices) {
-          if (choice instanceof inquirer.Separator || choice.type === 'separator') {
-            lines.push(chalk.dim(' ────────────────'));
-          } else {
-            const active = itemIdx === pointer;
-            const name = fit(choice.name);
-            const prefix = active ? chalk.cyan('❯') : ' ';
-            const label = active ? chalk.cyan(name) : name;
-            lines.push(`${prefix} ${label}`);
-            if (choice.description) {
-              const descLines = choice.description.trim().split('\n');
-              for (const dl of descLines) {
-                const descText = fit(dl.trim(), 6); // 6 = '    • '.length
-                if (descText) {
-                  lines.push(
-                    active ? chalk.dim.cyan(`    • ${descText}`) : chalk.dim(`    • ${descText}`)
-                  );
-                }
-              }
+        for (let i = 0; i < choices.length; i++) {
+          const rows = rowsFor[i];
+          const start = rowOffsetOf[i];
+          const isSeparator = rows[0].kind === 'sep';
+          const active = itemIdx === pointer;
+          for (let ri = 0; ri < rows.length; ri++) {
+            const rowNo = start + ri;
+            if (rowNo < viewStart || rowNo >= viewEnd) continue;
+            const row = rows[ri];
+            if (row.kind === 'sep') {
+              lines.push(chalk.dim(' ────────────────'));
+            } else if (row.kind === 'name') {
+              const prefix = active ? chalk.cyan('❯') : ' ';
+              const label = active ? chalk.cyan(row.text) : row.text;
+              lines.push(`${prefix} ${label}`);
+            } else {
+              lines.push(
+                active ? chalk.dim.cyan(`    • ${row.text}`) : chalk.dim(`    • ${row.text}`)
+              );
             }
-            itemIdx++;
           }
+          if (!isSeparator) itemIdx++;
+        }
+
+        if (windowed && viewEnd < totalRows) {
+          lines.push(chalk.dim(`  ↓ ${totalRows - viewEnd} more below`));
         }
 
         stdout.write(lines.join('\n') + '\n');
