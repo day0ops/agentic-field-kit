@@ -256,42 +256,57 @@ export class UseCaseManager {
    * when no infra state exists at all (e.g. a cluster installed via a raw --context flag).
    */
   static async getCurrentUseCase() {
-    const contexts = await this.resolveTrackingConfigMapContexts();
-    const candidates = contexts.length > 0 ? contexts : [null];
+    // resolveTrackingConfigMapContexts() merges every provisioned profile's kubeconfig
+    // into process.env.KUBECONFIG as a side effect of discovery, leaving whichever
+    // profile it processed last as the new ambient current-context. Restore the
+    // caller's original value afterward so later unscoped kubectl calls (e.g.
+    // deployApplication(), which has no --context of its own) still target the
+    // caller's intended cluster instead of an arbitrary other provisioned one.
+    const originalKubeconfig = process.env.KUBECONFIG;
+    try {
+      const contexts = await this.resolveTrackingConfigMapContexts();
+      const candidates = contexts.length > 0 ? contexts : [null];
 
-    let anyReachable = false;
-    for (const context of candidates) {
-      const contextFlag = context ? `--context=${context}` : '';
-      const result = await KubernetesHelper.kubectl(
-        [
-          ...(contextFlag ? [contextFlag] : []),
-          'get',
-          'configmap',
-          TRACKING_CONFIGMAP,
-          '-n',
-          TRACKING_NAMESPACE,
-          '-o',
-          'jsonpath={.data.usecase}',
-          // Without this, a cluster with no tracked use case exits nonzero (NotFound) --
-          // indistinguishable from a genuinely unreachable cluster without inspecting
-          // stderr text. --ignore-not-found makes "reachable, nothing tracked" exit 0.
-          '--ignore-not-found',
-        ],
-        { ignoreError: true }
-      );
-      if (result.exitCode === 0) {
-        anyReachable = true;
-        const usecase = result.stdout.trim();
-        if (usecase) return usecase;
+      let anyReachable = false;
+      for (const context of candidates) {
+        const contextFlag = context ? `--context=${context}` : '';
+        const result = await KubernetesHelper.kubectl(
+          [
+            ...(contextFlag ? [contextFlag] : []),
+            'get',
+            'configmap',
+            TRACKING_CONFIGMAP,
+            '-n',
+            TRACKING_NAMESPACE,
+            '-o',
+            'jsonpath={.data.usecase}',
+            // Without this, a cluster with no tracked use case exits nonzero (NotFound) --
+            // indistinguishable from a genuinely unreachable cluster without inspecting
+            // stderr text. --ignore-not-found makes "reachable, nothing tracked" exit 0.
+            '--ignore-not-found',
+          ],
+          { ignoreError: true }
+        );
+        if (result.exitCode === 0) {
+          anyReachable = true;
+          const usecase = result.stdout.trim();
+          if (usecase) return usecase;
+        }
+      }
+
+      if (!anyReachable) {
+        throw new Error(
+          'Cannot reach the Kubernetes API on any provisioned cluster — check your kubeconfig/credentials (e.g. an expired AWS SSO session) before continuing.'
+        );
+      }
+      return null;
+    } finally {
+      if (originalKubeconfig === undefined) {
+        delete process.env.KUBECONFIG;
+      } else {
+        process.env.KUBECONFIG = originalKubeconfig;
       }
     }
-
-    if (!anyReachable) {
-      throw new Error(
-        'Cannot reach the Kubernetes API on any provisioned cluster — check your kubeconfig/credentials (e.g. an expired AWS SSO session) before continuing.'
-      );
-    }
-    return null;
   }
 
   /**
