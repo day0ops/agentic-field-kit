@@ -487,7 +487,18 @@ base
         return;
       }
 
-      const addonNames = ['cilium', 'solo-ui', 'keycloak', 'external-dns', 'cert-manager'];
+      // aws-load-balancer-controller must come last: keycloak's and other addons'
+      // LoadBalancer-type Services rely on it to clear the service.k8s.aws/resources
+      // finalizer on delete. Removing it first leaves those Services stuck forever
+      // and orphans their NLBs in AWS.
+      const addonNames = [
+        'cilium',
+        'solo-ui',
+        'keycloak',
+        'external-dns',
+        'cert-manager',
+        'aws-load-balancer-controller',
+      ];
       Logger.info('Cleaning up all addons...');
       for (const name of addonNames) {
         if (FeatureManager.has(name)) {
