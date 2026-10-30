@@ -141,15 +141,16 @@ spec:
 
   tests:
     - name: swarm-ready
-      description: Verify the lead investigator's AgentTemplate reconciles to Ready against the fraud-swarm Harness
+      description: Verify the lead investigator's Agent reconciles to Ready against the fraud-swarm Harness
       steps:
         - action: exec
-          # No Agent CRD in this architecture generation (kagent 1.0.0-alpha5): readiness lives
-          # on each AgentTemplate, per admitting Harness (status.harnesses[], keyed by harness
-          # name -- see substrate-agent's class doc comment). Only the entry-point template
-          # (fraud-lead-investigator) matters here; specialists are reachable only via its
-          # `agent` tool bindings and compile under its own revision.
-          command: kubectl wait agenttemplate/fraud-lead-investigator -n kagent-system --for=jsonpath='{.status.harnesses[?(@.harness=="fraud-swarm")].conditions[?(@.type=="Ready")].status}'=True --timeout=300s
+          # kagent 1.0.0-alpha12: readiness lives on the explicit Agent CRD that pairs an
+          # AgentTemplate to a Harness (api.kagent.dev/v1alpha3, replacing the prior
+          # generation's Harness.spec.allowedAgentTemplates selector -- see substrate-agent's
+          # class doc comment). Only the entry-point agent (fraud-lead-investigator) matters
+          # here; specialists are reachable only via its `subAgent` tool bindings and compile
+          # under their own Agent's revision.
+          command: kubectl wait agents.api.kagent.dev/fraud-lead-investigator -n kagent-system --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=300s
           timeout: 310s
         - action: verify
           expect:

@@ -14,19 +14,27 @@ describe('substrate-agent single-agent (backward compat)', () => {
   it('builds exactly one AgentTemplate named after config.name', () => {
     const tpls = f.buildAgentTemplates();
     expect(tpls.length).toBe(1);
+    expect(tpls[0].apiVersion).toBe('api.kagent.dev/v1alpha3');
     expect(tpls[0].metadata.name).toBe('substrate-demo');
     expect(tpls[0].metadata.labels['kagent.dev/harness']).toBe('substrate-demo');
     expect(tpls[0].spec.tools).toBeUndefined();
   });
-  it('harness references the shared WorkerPool and admits its own AgentTemplates', () => {
+  it('harness references the shared WorkerPool and no longer sets allowedAgentTemplates', () => {
     const h = f.buildHarness();
-    expect(h.apiVersion).toBe('kagent.dev/v1alpha3');
+    expect(h.apiVersion).toBe('api.kagent.dev/v1alpha3');
     expect(h.metadata.name).toBe('substrate-demo');
     expect(h.spec.substrate.workerPoolRef.name).toBe('kagent-default');
     expect(h.spec.workload.image).toBe(IMG);
-    expect(h.spec.allowedAgentTemplates.selector.matchLabels).toEqual({
-      'kagent.dev/harness': 'substrate-demo',
-    });
+    expect(h.spec.allowedAgentTemplates).toBeUndefined();
+  });
+  it('builds one Agent per AgentTemplate, pairing it to the Harness', () => {
+    const agents = f.buildAgents();
+    expect(agents.length).toBe(1);
+    expect(agents[0].apiVersion).toBe('api.kagent.dev/v1alpha3');
+    expect(agents[0].kind).toBe('Agent');
+    expect(agents[0].metadata.name).toBe('substrate-demo');
+    expect(agents[0].spec.harnessRef).toEqual({ name: 'substrate-demo' });
+    expect(agents[0].spec.template.ref).toEqual({ name: 'substrate-demo' });
   });
   it('builds no WorkerPool when workerImage is not set (relies on the addon-owned pool)', () => {
     expect(f.buildWorkerPool()).toBeUndefined();
@@ -53,7 +61,7 @@ describe('substrate-agent modelConfig', () => {
   });
   it('builds a dedicated ModelConfig named after the harness by default', () => {
     const mc = f.buildModelConfig();
-    expect(mc.apiVersion).toBe('kagent.dev/v1alpha3');
+    expect(mc.apiVersion).toBe('api.kagent.dev/v1alpha3');
     expect(mc.kind).toBe('ModelConfig');
     expect(mc.metadata.name).toBe('fraud-swarm-model-config');
     expect(mc.spec).toEqual({
@@ -86,7 +94,7 @@ describe('substrate-agent swarm', () => {
     namespace: 'kagent',
     image: IMG,
     workerPoolName: 'fraud-workers',
-    workerImage: 'ghcr.io/kagent-dev/substrate/ateom-gvisor:v0.2.0-beta5',
+    workerImage: 'ghcr.io/kagent-dev/substrate/ateom-gvisor:v0.6.0-b15382d4',
     workerPoolReplicas: 2,
     agents: [
       {
@@ -109,15 +117,32 @@ describe('substrate-agent swarm', () => {
       'tx-analyst',
     ]);
     for (const t of tpls) {
+      expect(t.apiVersion).toBe('api.kagent.dev/v1alpha3');
       expect(t.metadata.labels['kagent.dev/harness']).toBe('fraud-swarm');
     }
   });
-  it('maps agent-as-tool and mcp bindings to the CRD shape', () => {
+  it('builds one Agent per agent, each pairing its own AgentTemplate to the shared Harness', () => {
+    const agents = f.buildAgents();
+    expect(agents.map(a => a.metadata.name).sort()).toEqual([
+      'fraud-lead-investigator',
+      'tx-analyst',
+    ]);
+    for (const a of agents) {
+      expect(a.spec.harnessRef).toEqual({ name: 'fraud-swarm' });
+    }
+    const lead = agents.find(a => a.metadata.name === 'fraud-lead-investigator');
+    expect(lead.spec.template.ref).toEqual({ name: 'fraud-lead-investigator' });
+  });
+  it('maps agent-as-tool to a subAgent binding, with no isolation field', () => {
     const lead = f.buildAgentTemplates().find(t => t.metadata.name === 'fraud-lead-investigator');
-    const agentTool = lead.spec.tools.find(t => t.agent);
-    expect(agentTool.agent.templateRef.name).toBe('tx-analyst');
-    expect(agentTool.agent.name).toBe('tx-analyst');
-    expect(agentTool.agent.isolation).toBe('Shared');
+    const subAgentTool = lead.spec.tools.find(t => t.subAgent);
+    expect(subAgentTool.subAgent.templateRef).toEqual({ name: 'tx-analyst' });
+    expect(subAgentTool.subAgent.name).toBe('tx-analyst');
+    expect(subAgentTool.subAgent.isolation).toBeUndefined();
+    expect(subAgentTool.agent).toBeUndefined();
+  });
+  it('maps mcp bindings to the CRD shape unchanged', () => {
+    const lead = f.buildAgentTemplates().find(t => t.metadata.name === 'fraud-lead-investigator');
     const mcpTool = lead.spec.tools.find(t => t.mcp);
     expect(mcpTool.mcp.server).toEqual({ kind: 'RemoteMCPServer', name: 'core-banking-mcp' });
   });
@@ -126,14 +151,15 @@ describe('substrate-agent swarm', () => {
     expect(lead.spec.modelConfig.name).toBe('lead-model-config');
     expect(f.buildHarness().metadata.name).toBe('fraud-swarm');
   });
-  it('builds a dedicated WorkerPool when workerImage is set', () => {
+  it('builds a dedicated WorkerPool with a sandboxClasses list when workerImage is set', () => {
     const wp = f.buildWorkerPool();
     expect(wp.apiVersion).toBe('ate.dev/v1alpha1');
     expect(wp.kind).toBe('WorkerPool');
     expect(wp.metadata.name).toBe('fraud-workers');
     expect(wp.spec.replicas).toBe(2);
-    expect(wp.spec.workerImage).toBe('ghcr.io/kagent-dev/substrate/ateom-gvisor:v0.2.0-beta5');
-    expect(wp.spec.sandboxClass).toBe('gvisor');
+    expect(wp.spec.workerImage).toBe('ghcr.io/kagent-dev/substrate/ateom-gvisor:v0.6.0-b15382d4');
+    expect(wp.spec.sandboxClasses).toEqual([{ name: 'gvisor' }]);
+    expect(wp.spec.sandboxClass).toBeUndefined();
     // Mirrors the kagent-enterprise chart's own WorkerPool label exactly --
     // ate-api's scheduler filters candidate workers by this selector.
     expect(wp.metadata.labels['kagent.dev/worker-pool']).toBe('fraud-workers');
