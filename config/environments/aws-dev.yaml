@@ -46,14 +46,14 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.3
+    version: v2026.10.1
 
   kagent:
     scheme: https
     version: 0.5.6
 
   substrate:
-    version: 1.0.0-alpha5
+    version: 1.0.0-alpha12
 
   soloUi:
     version: 0.5.6

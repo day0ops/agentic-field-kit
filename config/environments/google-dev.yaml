@@ -67,28 +67,25 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.3
+    version: v2026.10.1
 
   kagent:
     scheme: https
-    # 1.0.0-alpha6 pairs with substrate 0.3.0-alpha3 (see addons/kagent/index.js): that fixes
-    # CreateActorEgressPolicy/session creation, but real A2A message delivery then fails on every
-    # session with atenet-router reporting "Connect: tunnel failed" (root cause not isolated).
-    # Pairing alpha6 with beta6 instead is a hard protobuf field-number collision, not a
-    # workaround: EgressRule field 2 is Cidrs in beta6's schema and Https in 0.3.0-alpha3's, so
-    # CreateSession fails outright, reproduced even on Solo's own minimal "Your First Agent"
-    # tutorial -- see addons/kagent/index.js for the full writeup. alpha5 is an older architecture
-    # generation (`kagent.dev` apiGroup, no `Agent` CRD, Harness.allowedAgentTemplates selector
-    # instead of an Agent pairing) that substrate-agent now targets directly -- see that
-    # feature's class doc comment.
-    version: 1.0.0-alpha5
+    # 1.0.0-alpha12 moved the CRD group from `kagent.dev` to `api.kagent.dev` and replaced
+    # Harness.allowedAgentTemplates (a label selector) with an explicit per-agent `Agent` CRD
+    # pairing a Harness to an AgentTemplate -- substrate-agent's buildHarness()/buildAgents()
+    # targets this shape directly, see that feature's class doc comment. Paired with substrate
+    # 0.6.0-b15382d4 below (confirmed via enterprise-kagent's own v1.0.0-alpha12 tag, which pins
+    # that exact substrate module version in its controller's go.mod).
+    version: 1.0.0-alpha12
 
   # Agent Substrate chart version
   substrate:
-    # alpha5's native, correctly-paired substrate version (see addons/kagent/index.js and the
-    # kagent.version comment above for the alpha6/beta6 vs alpha6/0.3.0-alpha3 incompatibilities
-    # that led here).
-    version: 0.2.0-beta6-5462374
+    # 0.6.0-b15382d4 is alpha12's natively paired substrate version (see the kagent.version
+    # comment above). WorkerPool.spec.sandboxClass (scalar) became spec.sandboxClasses (a
+    # required list) at this version -- substrate-agent's buildWorkerPool() targets this shape.
+    version: 0.6.0-b15382d4
+    registry: oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm
 
   soloUi:
     version: 0.5.7

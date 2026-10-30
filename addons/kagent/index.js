@@ -31,9 +31,11 @@ const CONTROLLER_RELEASE = 'kagent';
 // even on a session created after restarting every ate-system component. Root cause not yet
 // isolated (looks like atenet-router's own tunnel/mTLS client-cert logic, not network/policy --
 // raw TLS connectivity to both candidate hops was confirmed healthy). kagent.version moved to
-// 1.0.0-alpha5 instead (see the kagent.version comment in config/environments/google-dev.yaml),
-// whose own, older architecture generation is natively paired with beta6 -- not a workaround
-// pairing like alpha6/beta6 was.
+// 1.0.0-alpha5 instead, whose own, older architecture generation was natively paired with this
+// beta6 default -- not a workaround pairing like alpha6/beta6 was. kagent.version has since moved
+// past alpha5 too (see the kagent.version comment in config/environments/google-dev.yaml for the
+// current pairing); this constant stays beta6 only as the fallback default for callers that don't
+// override substrate.version.
 const SUBSTRATE_VERSION = '0.2.0-beta6-5462374';
 const SUBSTRATE_REGISTRY = 'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm';
 // Worker image tag must match the substrate chart version exactly (same release train) --
@@ -163,7 +165,9 @@ const ANNOTATION_KEY_TO_STORAGE_BACKEND = {
  *                                 // own "ate-system" namespace (fixed by the chart), separate from
  *                                 // the two kagent releases this addon already manages.
  *     enabled: boolean,           // Default: false
- *     version: string,           // Substrate chart version. Default: '0.2.0-beta5'
+ *     version: string,           // Substrate chart version. Default: SUBSTRATE_VERSION (see top of file)
+ *     registry: string,          // Substrate chart OCI registry (no trailing /substrate).
+ *                                // Default: SUBSTRATE_REGISTRY (see top of file)
  *     namespace: string,         // Default: 'ate-system' (effectively fixed by the chart)
  *     kubectlAteVersion: string, // kubectl-ate CLI + release-asset version. Default: 'v0.2.0-beta5'
  *     workerPool: {
@@ -329,6 +333,7 @@ export class KagentFeature extends AddonFeature {
     this.substrate = {
       enabled: substrate.enabled === true,
       version: substrateVersion,
+      registry: substrate.registry || SUBSTRATE_REGISTRY,
       namespace: substrate.namespace || SUBSTRATE_NAMESPACE,
       kubectlAteVersion: substrate.kubectlAteVersion || KUBECTL_ATE_VERSION,
       workerPool: {
@@ -976,7 +981,7 @@ export class KagentFeature extends AddonFeature {
           'upgrade',
           '-i',
           SUBSTRATE_RELEASE,
-          `${SUBSTRATE_REGISTRY}/substrate`,
+          `${this.substrate.registry}/substrate`,
           '-n',
           this.substrate.namespace,
           '--version',

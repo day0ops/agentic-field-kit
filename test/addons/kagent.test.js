@@ -115,6 +115,7 @@ test('substrate config parses with defaults', () => {
   });
   expect(f.substrate.enabled).toBe(true);
   expect(f.substrate.version).toBe('0.2.0-beta6-5462374');
+  expect(f.substrate.registry).toBe('oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm');
   expect(f.substrate.namespace).toBe('ate-system');
   expect(f.substrate.kubectlAteVersion).toBe('v0.2.0-beta5');
   expect(f.substrate.workerPool.name).toBe('kagent-default');
@@ -132,6 +133,7 @@ test('substrate config parses with overrides', () => {
     substrate: {
       enabled: true,
       version: '0.2.0-beta8',
+      registry: 'oci://example.com/custom-substrate-helm',
       namespace: 'custom-ate',
       kubectlAteVersion: 'v0.2.0-beta8',
       workerPool: {
@@ -149,6 +151,7 @@ test('substrate config parses with overrides', () => {
     },
   });
   expect(f.substrate.version).toBe('0.2.0-beta8');
+  expect(f.substrate.registry).toBe('oci://example.com/custom-substrate-helm');
   expect(f.substrate.namespace).toBe('custom-ate');
   expect(f.substrate.kubectlAteVersion).toBe('v0.2.0-beta8');
   expect(f.substrate.workerPool.name).toBe('custom-pool');
