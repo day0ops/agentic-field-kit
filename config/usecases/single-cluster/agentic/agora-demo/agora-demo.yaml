@@ -1,0 +1,128 @@
+apiVersion: agentic.demo/v1
+kind: UseCase
+metadata:
+  name: agora-demo
+  description: A live online marketplace (buy-now plus live auctions) where buyer and seller interactions are backed by AI agents on Agent Substrate
+
+spec:
+  infra: gke-single-cluster-substrate
+  category: agentic
+
+  features:
+    - name: kagent-mcp-server
+      description: Bids MCP (place/withdraw bids, auto-bid ceiling, bid history)
+      config:
+        serverName: bids-mcp
+        namespace: kagent-system
+        image: '{{env.images.agoraDemo.bidsMcp}}'
+        port: 9101
+        env:
+          - name: CATALOG_API_URL
+            value: http://catalog-api.kagent-system.svc.cluster.local:18080
+    - name: kagent-mcp-server
+      description: Orders MCP (order status, simulated checkout)
+      config:
+        serverName: orders-mcp
+        namespace: kagent-system
+        image: '{{env.images.agoraDemo.ordersMcp}}'
+        port: 9102
+        env:
+          - name: CATALOG_API_URL
+            value: http://catalog-api.kagent-system.svc.cluster.local:18080
+    - name: kagent-mcp-server
+      description: Pricing MCP (price comps and suggestions)
+      config:
+        serverName: pricing-mcp
+        namespace: kagent-system
+        image: '{{env.images.agoraDemo.pricingMcp}}'
+        port: 9103
+        env:
+          - name: CATALOG_API_URL
+            value: http://catalog-api.kagent-system.svc.cluster.local:18080
+    - name: kagent-mcp-server
+      description: Trust MCP (fraud/shill-bid risk scoring, seller reputation)
+      config:
+        serverName: trust-mcp
+        namespace: kagent-system
+        image: '{{env.images.agoraDemo.trustMcp}}'
+        port: 9104
+        env:
+          - name: CATALOG_API_URL
+            value: http://catalog-api.kagent-system.svc.cluster.local:18080
+
+    - name: substrate-agent
+      description: Four-agent marketplace swarm (buyer/seller concierges + bidding/trust specialists) on a shared Substrate worker pool
+      config:
+        name: agora-swarm
+        namespace: kagent-system
+        image: '{{env.images.kagentHarness}}'
+        workerPoolName: agora-workers
+        workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateom-gvisor:v{{env.substrate.version}}'
+        workerPoolReplicas: 2
+        modelConfigRef: default-model-config
+        snapshots:
+          bucket: '{{infra.clusters.demo.storage.bucket}}'
+        agents:
+          - name: shopping-assistant
+            description: Buyer-facing concierge - answers product questions, delegates bid actions and trust questions
+            systemPrompt: >-
+              You are the marketplace's shopping assistant, the buyer's single point of contact.
+              For any bid placement, withdrawal, or auto-bid ceiling change, delegate to
+              auto-bidder - never claim a bid action succeeded unless auto-bidder's tool call
+              confirmed it. For any authenticity or seller-trust question, delegate to
+              trust-safety - never state a trust judgment you did not receive from that
+              delegation. Never invent a listing, price, or bid status you were not given by a
+              tool or delegated agent.
+            tools:
+              - agent: auto-bidder
+                description: Place/withdraw bids and manage auto-bid ceilings on the buyer's behalf
+              - agent: trust-safety
+                description: Answer authenticity and seller-trust questions
+          - name: auto-bidder
+            description: Proxy-bids on a buyer's behalf up to a stated maximum
+            systemPrompt: >-
+              You place and withdraw bids and manage auto-bid ceilings via your tools only -
+              never report a bid as placed, withdrawn, or adjusted unless the tool call
+              confirmed it. For any bid you consider high-value, delegate to trust-safety for a
+              pre-bid risk check before placing it.
+            tools:
+              - mcp: bids-mcp
+              - agent: trust-safety
+                description: Pre-bid risk check on a high-value bid
+          - name: listing-pricing-assistant
+            description: Seller-facing concierge - drafts listings, suggests pricing
+            systemPrompt: >-
+              You are the marketplace's listing and pricing assistant, the seller's single
+              point of contact. You suggest prices and comparable items via your pricing tool
+              only - never invent a price suggestion or comparable listing you were not given
+              by a tool call.
+            tools:
+              - mcp: pricing-mcp
+          - name: trust-safety
+            description: Screens bids and listings for fraud/counterfeit/shill signals
+            systemPrompt: >-
+              You screen bids and listings for fraud, counterfeit, and shill-bid signals via
+              your trust tool only - never state a risk score, reason, or reputation summary
+              you were not given by a tool call.
+            tools:
+              - mcp: trust-mcp
+
+    - name: agora-console
+      description: Agora console (buyer storefront, seller dashboard, operator view)
+      config:
+        namespace: kagent-system
+        catalogApiImage: '{{env.images.agoraDemo.catalogApi}}'
+        consoleImage: '{{env.images.agoraDemo.console}}'
+        hostname: '{{env.domains.app.agoraDemo}}'
+        sourceRanges: '{{env.security.vpnSourceRanges}}'
+
+  tests:
+    - name: swarm-ready
+      description: Verify the shopping-assistant's Agent reconciles to Ready against the agora-swarm Harness
+      steps:
+        - action: exec
+          command: kubectl wait agents.api.kagent.dev/shopping-assistant -n kagent-system --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=300s
+          timeout: 310s
+        - action: verify
+          expect:
+            exitCode: 0

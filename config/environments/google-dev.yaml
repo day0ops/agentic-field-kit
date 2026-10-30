@@ -125,6 +125,13 @@ spec:
       deviceRiskMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/device-risk-mcp:v0.1.0
       typologyMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/typology-mcp:v0.1.0
       opsConsole: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:v0.1.0
+    agoraDemo:
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-api:v0.1.0
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-console:v0.1.0
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-bids-mcp:v0.1.0
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-orders-mcp:v0.1.0
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-pricing-mcp:v0.1.0
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-trust-mcp:v0.1.0
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
@@ -156,3 +163,4 @@ spec:
     app:
       main: app.agentic-demo-gke.kasunt.apac.fe.solo.io
       retailReturns: retail-returns.agentic-demo-gke.kasunt.apac.fe.solo.io
+      agoraDemo: agora.agentic-demo-gke.kasunt.apac.fe.solo.io
