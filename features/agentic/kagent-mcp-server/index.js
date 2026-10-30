@@ -38,6 +38,9 @@ import { Feature } from '../../../src/lib/feature.js';
  *   path: string,            // Default: '/mcp' -- HTTP transport mount path
  *   description: string,     // Default: `MCP server '<serverName>'` -- RemoteMCPServer.spec.description (required by its CRD)
  *   legacyNativeMcpServer: boolean, // Default: false -- true targets kagent < 1.0.0-alpha12's native MCPServer CRD instead
+ *   env: [{name: string, value: string}], // Optional -- extra container env vars, e.g. CATALOG_API_URL.
+ *                                          // Only applies to the default (non-legacy) Deployment path -
+ *                                          // ignored when legacyNativeMcpServer is true.
  * }
  */
 export class KagentMcpServerFeature extends Feature {
@@ -50,6 +53,7 @@ export class KagentMcpServerFeature extends Feature {
     this.path = config.path || '/mcp';
     this.description = config.description || `MCP server '${this.serverName}'`;
     this.legacyNativeMcpServer = config.legacyNativeMcpServer === true;
+    this.env = config.env || [];
   }
 
   validate() {
@@ -109,6 +113,7 @@ export class KagentMcpServerFeature extends Feature {
                 name: this.serverName,
                 image: this.image,
                 ports: [{ containerPort: this.port }],
+                ...(this.env.length > 0 ? { env: this.env } : {}),
                 readinessProbe: {
                   tcpSocket: { port: this.port },
                   initialDelaySeconds: 10,

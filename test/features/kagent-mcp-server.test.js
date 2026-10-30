@@ -40,6 +40,24 @@ describe('kagent-mcp-server (default: Deployment + Service)', () => {
     expect(r.spec.protocol).toBe('STREAMABLE_HTTP');
     expect(r.spec.description).toBeTruthy();
   });
+
+  it('includes env vars on the container when env is set', () => {
+    const withEnv = new KagentMcpServerFeature('kagent-mcp-server', {
+      serverName: 'bids-mcp',
+      namespace: 'agora-demo',
+      image: 'example.com/bids-mcp:v1',
+      port: 9101,
+      env: [{ name: 'CATALOG_API_URL', value: 'http://catalog-api.agora-demo.svc.cluster.local:18080' }],
+    });
+    const d = withEnv.buildDeployment();
+    expect(d.spec.template.spec.containers[0].env).toEqual([
+      { name: 'CATALOG_API_URL', value: 'http://catalog-api.agora-demo.svc.cluster.local:18080' },
+    ]);
+  });
+
+  it('omits env entirely when not set, matching existing callers', () => {
+    expect(f.buildDeployment().spec.template.spec.containers[0].env).toBeUndefined();
+  });
 });
 
 describe('kagent-mcp-server (legacyNativeMcpServer: true)', () => {
