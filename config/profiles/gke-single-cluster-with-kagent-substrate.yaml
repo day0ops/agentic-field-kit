@@ -1,9 +1,9 @@
 apiVersion: agentic.demo/v1
 kind: Profile
 metadata:
-  name: gke-single-cluster-mesh-with-kagent-substrate
+  name: gke-single-cluster-with-kagent-substrate
   description: |
-    Single GKE cluster ambient mesh with kagent Enterprise + Agent Substrate, keycloak OIDC login, and enterprise agentgateway fronting the UI over Google Cloud DNS + Let's Encrypt.
+    Single GKE cluster with kagent Enterprise + Agent Substrate (no Istio Ambient mesh), keycloak OIDC login, and enterprise agentgateway fronting the UI over Google Cloud DNS + Let's Encrypt.
 
 spec:
   infra: gke-single-cluster-substrate
@@ -38,7 +38,6 @@ spec:
       version: '{{env.agentgateway.version}}'
       config:
         enterprise: true
-        ambientEnabled: true
         tokenExchange:
           enabled: true
           issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
@@ -134,6 +133,7 @@ spec:
         substrate:
           enabled: true
           version: '{{env.substrate.version}}'
+          registry: '{{env.substrate.registry}}'
           snapshots:
             identityAnnotation:
               key: '{{infra.clusters.demo.storage.identityAnnotationKey}}'
