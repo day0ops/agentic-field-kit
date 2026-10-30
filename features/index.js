@@ -42,6 +42,9 @@ import { SubstrateAgentFeature } from './agentic/substrate-agent/index.js';
 import { FraudOpsConsoleFeature } from './agentic/fraud-ops-console/index.js';
 import { KagentAccessPolicyFeature } from './agentic/kagent-access-policy/index.js';
 import { AccessPolicyTestHarnessFeature } from './agentic/access-policy-test-harness/index.js';
+import { AgoraConsoleFeature } from './agentic/agora-console/index.js';
+import { RateLimitPolicyFeature } from './agentic/rate-limit-policy/index.js';
+import { OpenapiMcpBackendFeature } from './agentic/openapi-mcp-backend/index.js';
 
 // Security Features
 import { WaypointFeature } from './security/waypoint/index.js';
@@ -98,6 +101,9 @@ FeatureManager.register('substrate-agent', SubstrateAgentFeature);
 FeatureManager.register('fraud-ops-console', FraudOpsConsoleFeature);
 FeatureManager.register('kagent-access-policy', KagentAccessPolicyFeature);
 FeatureManager.register('access-policy-test-harness', AccessPolicyTestHarnessFeature);
+FeatureManager.register('agora-console', AgoraConsoleFeature);
+FeatureManager.register('rate-limit-policy', RateLimitPolicyFeature);
+FeatureManager.register('openapi-mcp-backend', OpenapiMcpBackendFeature);
 
 // Security
 FeatureManager.register('waypoint', WaypointFeature);
@@ -156,6 +162,9 @@ export { SubstrateAgentFeature } from './agentic/substrate-agent/index.js';
 export { FraudOpsConsoleFeature } from './agentic/fraud-ops-console/index.js';
 export { KagentAccessPolicyFeature } from './agentic/kagent-access-policy/index.js';
 export { AccessPolicyTestHarnessFeature } from './agentic/access-policy-test-harness/index.js';
+export { AgoraConsoleFeature } from './agentic/agora-console/index.js';
+export { RateLimitPolicyFeature } from './agentic/rate-limit-policy/index.js';
+export { OpenapiMcpBackendFeature } from './agentic/openapi-mcp-backend/index.js';
 
 // Security
 export { WaypointFeature } from './security/waypoint/index.js';
