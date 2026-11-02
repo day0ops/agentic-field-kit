@@ -1,0 +1,256 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: local-single-cluster-with-kagent-substrate
+  description: |
+    Single bring-your-own Kubernetes cluster with kagent Enterprise + Agent Substrate.
+    - keycloak OIDC login
+    - enterprise agentgateway fronting the UI
+
+spec:
+  # No infra: field - this is a bring-your-own cluster, installed via `base install --context`,
+  # which bypasses infra-state resolution entirely. No {{infra.*}} tokens are used below.
+  environment: local
+  gatewayApiVersion: v1.6.0
+
+  addons:
+    - name: cert-manager
+      description: TLS certificate management (Let's Encrypt via Cloudflare DNS-01)
+      version: '{{env.addons.cert-manager.version}}'
+      namespace: cert-manager
+      config:
+        letsencrypt:
+          enabled: true
+          provider: cloudflare
+          email: '{{env.acme.email}}'
+
+    - name: external-dns
+      description: Automatic DNS record management via Cloudflare
+      version: '{{env.addons.external-dns.version}}'
+      namespace: external-dns
+      config:
+        provider: cloudflare
+        # Cloudflare zones are the registered apex domain.
+        domainFilter: '{{env.dns.parentZone.domain}}'
+        txtOwnerId: '{{env.dns.txtOwnerId}}'
+        # MetalLB-assigned IPs are private - Cloudflare's proxy can't reach them.
+        proxied: false
+
+    - name: agentgateway
+      description: AI Gateway Enterprise (GatewayClass + token exchange for kagent OIDC)
+      phase: post
+      namespace: agentgateway-system
+      version: '{{env.agentgateway.version}}'
+      config:
+        enterprise: true
+        tokenExchange:
+          enabled: true
+          issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+          jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+        ui:
+          enabled: true
+          hostname: '{{env.domains.core.agentgatewayUi}}'
+          oidc:
+            issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+            # Client IDs are the enterprise-agentgateway-ui chart defaults
+            # (enterprise-agentgateway-ui / enterprise-agentgateway-ui-backend) -- the keycloak
+            # clients below must use those exact IDs.
+            backendClientSecret: enterprise-agentgateway-ui-backend-secret
+            # Maps this realm's existing groups to the UI's built-in roles -- the chart's own
+            # default roleMappings (admins/writers/readers) don't match our group names.
+            roleMappings:
+              kagent-admins: global.Admin
+              kagent-writers: global.Writer
+              kagent-readers: global.Reader
+
+    - name: keycloak
+      description: Keycloak OIDC provider
+      phase: post
+      namespace: keycloak
+      config:
+        hostname: '{{env.domains.core.keycloak}}'
+        tls:
+          enabled: true
+          createCertificate: true
+          clusterIssuerName: letsencrypt-dns
+        realms:
+          - realm: kagent
+            groups:
+              - kagent-admins
+              - kagent-writers
+              - kagent-readers
+              - buyers
+              - sellers
+              - operators
+            clients:
+              - clientId: kagent-enterprise
+                type: confidential
+                clientSecret: kagent-enterprise-secret
+                flows:
+                  - authorization-code
+                groupMembership: true
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+                postLogoutRedirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+              - clientId: kagent-ui
+                type: public
+                flows:
+                  - authorization-code
+                clientAttributes:
+                  pkce.code.challenge.method: S256
+                groupMembership: true
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401.
+                audience: kagent-enterprise-api
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+              # Agora marketplace demo's buyer/seller login + agentgateway A2A chat. Lives in
+              # this realm, not a separate one: kagent-controller's enterprise OIDC validation
+              # trusts exactly one issuer, so a same-realm token exchange against a different
+              # realm can never produce an accepted token. Multiple client applications in one
+              # realm, differentiated by group, is the supported pattern for this.
+              - clientId: agora-console-ui
+                type: confidential
+                clientSecret: agora-console-ui-secret
+                # authorization-code is the real Keycloak-redirect login oidc-gateway drives.
+                # direct-access is a local/no-gate dev fallback, same reasoning as
+                # retail-returns-ui's own client. Both issue tokens for this same client
+                # deliberately: the RFC 8693 exchange below authenticates as this client
+                # too, and Keycloak's standard token exchange only permits a client to
+                # exchange tokens it issued itself.
+                flows:
+                  - direct-access
+                  - authorization-code
+                redirectUris:
+                  # /account/callback, not /callback -- oidc-gateway's attach-only mode
+                  # only gates agora-console's /account rule, so the OIDC callback must
+                  # land there too or ext-auth-service never sees it (see oidc-gateway's
+                  # callbackPath in the agora-demo-local usecase).
+                  - '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}/account/callback'
+                postLogoutRedirectUris:
+                  - '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}'
+                groupMembership: true
+                audience: kagent-enterprise-api
+                # Reused as token-exchange-policy's clientAuth client -- Keycloak 26.2+
+                # requires this attribute explicitly enabled per-client or the exchange
+                # endpoint rejects with "Standard token exchange is not enabled for the
+                # requested client".
+                clientAttributes:
+                  standard.token.exchange.enabled: 'true'
+              # Browser-facing agentgateway UI login. Client ID matches the
+              # enterprise-agentgateway-ui chart's ui.oidc.clientId default.
+              - clientId: enterprise-agentgateway-ui
+                type: public
+                flows:
+                  - authorization-code
+                clientAttributes:
+                  pkce.code.challenge.method: S256
+                groupMembership: true
+                # The UI backend validates access tokens against its own client ID by default --
+                # Keycloak doesn't include a client's own ID in `aud` without an explicit mapper.
+                audience: enterprise-agentgateway-ui
+                redirectUris:
+                  - '{{env.agentgateway.scheme}}://{{env.domains.core.agentgatewayUi}}/*'
+              # agentgateway-ui's backend-side OIDC client (token validation), not a login flow.
+              # Client ID matches the chart's backend.oidc.clientId default.
+              - clientId: enterprise-agentgateway-ui-backend
+                type: confidential
+                clientSecret: enterprise-agentgateway-ui-backend-secret
+                flows:
+                  - service-account
+            users:
+              - username: kagent-admin
+                email: kagent-admin@example.com
+                firstName: Kagent
+                lastName: Admin
+                memberOf:
+                  - kagent-admins
+              - username: kagent-writer
+                email: kagent-writer@example.com
+                firstName: Kagent
+                lastName: Writer
+                memberOf:
+                  - kagent-writers
+              - username: kagent-reader
+                email: kagent-reader@example.com
+                firstName: Kagent
+                lastName: Reader
+                memberOf:
+                  - kagent-readers
+              - username: demo-buyer
+                email: demo-buyer@example.com
+                firstName: Demo
+                lastName: Buyer
+                memberOf:
+                  - buyers
+              - username: demo-seller
+                email: demo-seller@example.com
+                firstName: Demo
+                lastName: Seller
+                memberOf:
+                  - sellers
+              - username: demo-operator
+                email: demo-operator@example.com
+                firstName: Demo
+                lastName: Operator
+                memberOf:
+                  - operators
+            # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile -- except
+            # demo-buyer/demo-seller/demo-operator, which use AGORA_CUSTOMER_PASSWORD instead
+            # (per-user override, see addons/keycloak/index.js's userPasswordOverrides)
+
+    - name: kagent
+      description: Solo Enterprise for kagent AI agent platform + Agent Substrate
+      phase: post
+      namespace: kagent-system
+      version: '{{env.kagent.version}}'
+      config:
+        enterprise: true
+        clusterName: local-cluster
+        hostname: '{{env.domains.core.kagentUi}}'
+        provider:
+          type: openAI
+        oidc:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientSecret: kagent-enterprise-secret
+        otel:
+          endpoint: otel-collector-opentelemetry-collector.kagent-system.svc.cluster.local:4317
+          captureSensitiveContent: false
+        substrate:
+          enabled: true
+          version: '{{env.substrate.version}}'
+          registry: '{{env.substrate.registry}}'
+          kubectlAteVersion: '{{env.substrate.kubectlAteVersion}}'
+          # No snapshots.identityAnnotation - falls back to the bundled RustFS store, backed by
+          # the cluster's default StorageClass (no cloud object store available locally).
+
+    - name: telemetry
+      description: Grafana + Tempo observability for kagent + Agent Substrate (no Loki)
+      phase: post
+      namespace: telemetry
+      chartVersions: '{{env.addons.telemetry}}'
+      config:
+        enableLogs: false
+        enableTraces: true
+        enableMetrics: true
+        installDashboards: true
+        dashboardCategories: ['agw', 'substrate']
+        installOtelCollectors: false
+        gatewayClassName: enterprise-agentgateway
+        grafanaHostname: '{{env.domains.core.grafana}}'
+        grafanaTls:
+          enabled: true
+          secretName: grafana-tls
+          issuer: letsencrypt-dns
+
+    - name: otel-collector
+      description: Minimal OTel Collector catching kagent/substrate OTLP into kagent's ClickHouse, fanning traces/metrics to Grafana Tempo/Prometheus
+      phase: post
+      namespace: kagent-system
+      config:
+        clusterName: local-cluster
+        telemetryNamespace: telemetry

@@ -14,18 +14,33 @@ const ENT_CONTROLLER_OCI =
   'oci://us-docker.pkg.dev/solo-public/kagent-enterprise-helm/charts/kagent-enterprise';
 
 // Agent Substrate defaults -- keep in sync with addons/kagent/index.js
-const SUBSTRATE_VERSION = '0.2.0-beta6-5462374';
+const SUBSTRATE_VERSION = '1.0.0-rc.1-76ace06f';
 const SUBSTRATE_OCI = 'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate';
+const SUBSTRATE_CRDS_OCI =
+  'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-crds';
+const SUBSTRATE_PODCERT_OCI =
+  'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-podcert';
 const SUBSTRATE_WORKER_IMAGE_REGISTRY = 'us-docker.pkg.dev/solo-public/substrate-enterprise';
 const SUBSTRATE_NAMESPACE = 'ate-system';
 const PODCERT_NAMESPACE = 'podcertificate-controller-system';
-const KUBECTL_ATE_VERSION = 'v0.2.0-beta5';
+// GitHub release tag format (v1.0.0-rc1), which differs from the Helm chart's own OCI
+// version string (SUBSTRATE_VERSION, e.g. 1.0.0-rc.1-76ace06f) even for the same release.
+const KUBECTL_ATE_VERSION = 'v1.0.0-rc1';
 
 // Keep in sync with addons/kagent/index.js's ANNOTATION_KEY_TO_STORAGE_BACKEND.
 const ANNOTATION_KEY_TO_STORAGE_BACKEND = {
   'iam.gke.io/gcp-service-account': 'gcs',
   'eks.amazonaws.com/role-arn': 's3',
 };
+
+// Keep in sync with addons/kagent/index.js's RBAC_CATALOG_RESOURCES.
+const RBAC_CATALOG_RESOURCES = [
+  'agents',
+  'agent-templates',
+  'harnesses',
+  'model-configs',
+  'runtimes',
+];
 
 export function envVarsFor(addonCfg, _clusterName) {
   const cfg = addonCfg.config || {};
@@ -100,8 +115,9 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   const enterprise = cfg.enterprise === true;
   const ctx = `$${clusterName.toUpperCase()}_CONTEXT`;
 
-  // Alpha chart line (1.0.0-alpha3+) moved OIDC to enterprise.oidc.*/enterprise.rbac.roleMappings.*
-  // and registers a separate frontend client -- mirrors addons/kagent/index.js's isAlphaChart gate.
+  // Alpha chart line (1.0.0-alpha3+) moved OIDC to enterprise.oidc.*, registers a separate
+  // frontend client, and uses EnterpriseKagentRBACPolicy CRs for catalog RBAC instead of the old
+  // chart's rbac.roleMapping.* -- mirrors addons/kagent/index.js's isAlphaChart gate.
   const version =
     resolveRunbookTemplates(addonCfg.version, { env }) ||
     (enterprise ? ENTERPRISE_VERSION : OSS_VERSION);
@@ -148,6 +164,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   const adminsGroup = rbac.adminsGroup || 'kagent-admins';
   const writersGroup = rbac.writersGroup || 'kagent-writers';
   const readersGroup = rbac.readersGroup || 'kagent-readers';
+  const agentregistryGroup = rbac.agentregistryGroup || 'agentregistry';
 
   // Agent Substrate -- mirrors addons/kagent/index.js's constructor/_build* methods
   const substrateCfg = cfg.substrate || {};
@@ -159,7 +176,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
     replicas: substrateWorkerPool.replicas || 1,
     workerImage:
       substrateWorkerPool.workerImage ||
-      `${SUBSTRATE_WORKER_IMAGE_REGISTRY}/ateom-gvisor:v${substrateVersionForImage}`,
+      `${SUBSTRATE_WORKER_IMAGE_REGISTRY}/ateworker-gvisor:v${substrateVersionForImage}`,
     sandboxClass: substrateWorkerPool.sandboxClass || 'gvisor',
   };
   const substrateNs = substrateCfg.namespace || SUBSTRATE_NAMESPACE;
@@ -196,19 +213,25 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   if (enterprise && isAlphaChart) {
     controllerArgs.push(
       `  --set-string licensing.licenseKey="$ENTERPRISE_KAGENT_LICENSE"`,
-      // Guard against a missing Groups claim -- client_credentials tokens from service
-      // accounts may not carry Groups until added to a group in the IdP; without the guard
-      // CEL evaluates a missing claim as a runtime error, i.e. a 401 (commas escaped -- Helm's
-      // --set parser splits unescaped commas as separate assignments).
-      `  --set-string "enterprise.rbac.roleMapper=has(claims.Groups) ? claims.Groups.transformList(i\\, v\\, v in rolesMap\\, rolesMap[v]) : []"`,
+      `  --set database.postgres.bundled.enabled=true`,
+      // Off by default -- without it the controller never mounts its postgres.podcert.ate.dev
+      // client-cert volume, which the bundled Postgres's pg_hba.conf requires (cert-only auth).
+      `  --set database.postgres.clientCertificate.enabled=true`,
+      // Off by default -- without it the controller has no podidentity.podcert.ate.dev/
+      // servicedns.podcert.ate.dev mTLS client identity, and its substrate gRPC client hangs
+      // until it times out: "substrate: dial ate-api ... context deadline exceeded".
+      `  --set controller.substrateClientCertificate.enabled=true`,
       `  --set enterprise.oidc.issuer="${oidcIssuer}"`,
       `  --set enterprise.oidc.clientId="${clientId}"`,
+      // Must match the Keycloak client's own audience mapper value -- a client ID here instead
+      // of a dedicated audience value makes the controller reject every token with a bare 401.
+      `  --set "enterprise.oidc.allowedAudiences[0]=kagent-enterprise-api"`,
       `  --set enterprise.oidc.secretRef=kagent-enterprise-oidc-secret`,
       `  --set enterprise.oidc.secretKey=clientSecret`,
-      `  --set "enterprise.rbac.roleMappings.${adminsGroup}=global.Admin"`,
-      `  --set "enterprise.rbac.roleMappings.${writersGroup}=global.Writer"`,
-      `  --set "enterprise.rbac.roleMappings.${readersGroup}=global.Reader"`,
-      `  --set enterprise.ui.frontend.oidc.clientId="${uiClientId}"`
+      `  --set enterprise.ui.frontend.oidc.clientId="${uiClientId}"`,
+      // Chart default reserves a full 2 CPUs for the bundled ClickHouse -- too much on a
+      // single-node demo cluster. Limit stays at the chart default so it can still burst.
+      `  --set clickhouse.resources.requests.cpu=300m`
     );
   } else if (enterprise) {
     controllerArgs.push(
@@ -322,6 +345,7 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
   const oidcSecretStep = isAlphaChart && oidcIssuer && clientSecret ? nextStep() : null;
   const uiExposureStep = uiExposureEnabled ? nextStep() : null;
   const controllerStep = nextStep();
+  const rbacPolicyStep = isAlphaChart && oidcIssuer ? nextStep() : null;
 
   let substrateBlock = '';
   if (substrateEnabled) {
@@ -332,17 +356,48 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
       'global:',
       '  licensing:',
       '    licenseKey: "$ENTERPRISE_AGENTGATEWAY_LICENSE"',
+      // Required as of substrate 1.0.0-rc1: ActorTemplate.snapshotConfig.storageLocation (set
+      // per-Harness by the substrate-agent feature's own snapshots.bucket config) is now
+      // rejected with "Forbidden" unless this preview gate is explicitly enabled -- confirmed
+      // live, silently accepted with no gate at all on the prior alpha12/0.6.0 line. Applies
+      // cluster-wide to ate-api-server, ate-controller, and atelet.
+      'preview:',
+      '  - PerTemplateSnapshotLocation',
       'credentialProvider:',
       '  namespacePolicies:',
       '    - atespace: $KAGENT_NAMESPACE',
       '      allowedNamespaces: [$KAGENT_NAMESPACE]',
+      // Off by default -- without it ate-api-server never mounts its postgres.podcert.ate.dev
+      // client-cert volume, which the bundled Postgres's pg_hba.conf requires (cert-only auth).
+      'postgres:',
+      '  clientCertificates:',
+      '    enabled: true',
+      // Chart default is only ate-client in this namespace -- kagent-controller (a different
+      // namespace/service account) reading Substrate inventory from the UI otherwise fails
+      // "ate-api could not read inventory: PermissionDenied". ate-api-server's OpenFGA authz
+      // checks the mTLS SPIFFE principal (spiffe://cluster.local/ns/<ns>/sa/<name>), not the
+      // "system:serviceaccount:..." string the chart's own ate-client default uses -- that
+      // format is for a different (non-mTLS) caller kind. Explicit list, not an append: this
+      // key replaces the chart default entirely.
+      'ateApi:',
+      '  authorization:',
+      '    bootstrapOwners:',
+      '      - system:serviceaccount:$SUBSTRATE_NAMESPACE:ate-client',
+      '      - spiffe://cluster.local/ns/$KAGENT_NAMESPACE/sa/kagent-controller',
+      // Chart default is an empty list, which renders atenet-router's ingress
+      // networkAuthorization rule as `source.spiffeId in []` -- never true for any caller,
+      // so every A2A SendMessage call TLS-handshakes then gets reset (KAGENT_SEND_NOT_ACCEPTED,
+      // no server-side log). Same SPIFFE principal as ateApi.authorization.bootstrapOwners above.
+      'atenetRouter:',
+      '  ingressAllowedSPIFFEIDs:',
+      '    - spiffe://cluster.local/ns/$KAGENT_NAMESPACE/sa/kagent-controller',
     ];
     if (otlpEndpoint) {
       substrateValuesLines.push(
         'otel:',
         `  endpoint: "${otlpEndpoint}"`,
         '  traces:',
-        '    enabled: false'
+        '    enabled: true'
       );
     }
     if (substrateSnapshotBackend === 'gcs') {
@@ -352,8 +407,177 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
     substrateBlock = `**Step ${substrateStep} - Install Agent Substrate:**
 
 Agent Substrate is the sandboxed actor/worker runtime kagent runs agents in (gVisor by default).
-Requires a Kubernetes cluster serving \`certificates.k8s.io/v1beta1\` with \`PodCertificateRequest\`
-enabled (GKE 1.37+ on the RAPID channel; EKS cannot enable this on its managed control plane).
+Requires a Kubernetes cluster serving \`certificates.k8s.io/v1beta1\`/\`v1\` with
+\`PodCertificateRequest\` enabled (GA in 1.37; EKS cannot enable this on its managed control
+plane). Vanilla Kubernetes ships no signer for custom signer names though -- cluster admins
+must bring their own, which is what the pod certificate controller below is.
+
+Create the $SUBSTRATE_NAMESPACE namespace with PodSecurity admission relaxed to "privileged" --
+atelet (the per-node sandbox agent) mounts hostPath volumes that any enforcing "baseline" or
+"restricted" namespace rejects outright. A no-op if the cluster has no such default; needed since
+a later Helm install's \`--create-namespace\` would otherwise create this namespace unlabeled:
+
+\`\`\`bash
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $SUBSTRATE_NAMESPACE
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+EOF
+\`\`\`
+
+Download \`kubectl-ate\`, the CLI used to bootstrap substrate's cryptographic pools:
+
+\`\`\`bash
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fsSL -o kubectl-ate \\
+  "https://github.com/kagent-dev/substrate/releases/download/$KUBECTL_ATE_VERSION/kubectl-ate-\${OS}-\${ARCH}" &&
+  chmod +x kubectl-ate
+\`\`\`
+
+Install the pod certificate controller (substrate-podcert chart) -- a standalone, once-per-cluster
+release that answers PodCertificateRequests for the \`*.podcert.ate.dev\` signers substrate pods
+request, and publishes their ClusterTrustBundles. Must exist before any substrate pod is created,
+not just before it needs to be Ready -- its pods request certificates immediately on creation.
+Create its 3 CA-pool Secrets first (idempotent -- skip any that already exist); the chart's pod
+unconditionally mounts all three:
+
+\`\`\`bash
+./kubectl-ate admin make-ca-pool --ca-id=1 --name=service-dns-ca-pool  --secret-namespace=${PODCERT_NAMESPACE} --context=${ctx}
+./kubectl-ate admin make-ca-pool --ca-id=1 --name=pod-identity-ca-pool --secret-namespace=${PODCERT_NAMESPACE} --context=${ctx}
+./kubectl-ate admin make-ca-pool --ca-id=1 --name=postgres-ca-pool     --secret-namespace=${PODCERT_NAMESPACE} --context=${ctx}
+
+helm upgrade --install substrate-podcert \\
+  ${SUBSTRATE_PODCERT_OCI} \\
+  --namespace ${PODCERT_NAMESPACE} \\
+  --version $SUBSTRATE_VERSION \\
+  --create-namespace \\
+  --wait \\
+  --set 'postgresClients[0]=$KAGENT_NAMESPACE/kagent-controller=kagent_readwrite_user\\,kagent_owner_user' \\
+  --kube-context ${ctx}
+\`\`\`
+
+kagent-controller's own bundled-Postgres wiring (below) shares this instance rather than
+deploying its own, under a different namespace/service account than ate-api-server (the
+\`postgresClients\` default) -- the entry above authorizes it for the \`postgres.podcert.ate.dev\`
+signer's client certs.
+
+Deploy the bundled, cert-authenticated development PostgreSQL (ate-api-server's state store) and
+bootstrap its roles/schema. Neither the chart nor ate-setup's public distribution creates these;
+adapted from solo-io/substrate's own bundled-Postgres path -- see
+\`addons/kagent/config/postgres.yaml\` and \`addons/kagent/config/postgres-setup.sql\` in this repo:
+
+\`\`\`bash
+kubectl apply --context ${ctx} -f addons/kagent/config/postgres.yaml
+kubectl --context ${ctx} rollout status statefulset/postgres -n $SUBSTRATE_NAMESPACE --timeout=300s
+
+kubectl --context ${ctx} exec -i -n $SUBSTRATE_NAMESPACE postgres-0 -c postgres -- psql \\
+  --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres --dbname atepg \\
+  --set=substrate_schema=substrate \\
+  --set=substrate_owner_role=substrate_owner --set=substrate_owner_user=substrate_owner_user --set=substrate_owner_password= \\
+  --set=substrate_readwrite_role=substrate_readwrite --set=substrate_readwrite_user=substrate_readwrite_user --set=substrate_readwrite_password= \\
+  < addons/kagent/config/postgres-setup.sql
+\`\`\`
+
+Create the two connection-string Secrets \`postgres.readWriteConnectionStringSecretRef\`/
+\`ownerConnectionStringSecretRef\` point at, each presenting its own client cert (requires
+\`postgres.clientCertificates.enabled=true\` on the substrate release below, so ate-api-server
+mounts them):
+
+\`\`\`bash
+kubectl --context ${ctx} create secret generic substrate-postgres-readwrite -n $SUBSTRATE_NAMESPACE \\
+  --from-literal=readWriteConnectionString="postgresql://substrate_readwrite_user@postgres.$SUBSTRATE_NAMESPACE.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/substrate_readwrite_user.pem&sslkey=/run/postgres.podcert.ate.dev/substrate_readwrite_user.pem" \\
+  --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+kubectl --context ${ctx} create secret generic substrate-postgres-owner -n $SUBSTRATE_NAMESPACE \\
+  --from-literal=ownerConnectionString="postgresql://substrate_owner_user@postgres.$SUBSTRATE_NAMESPACE.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/substrate_owner_user.pem&sslkey=/run/postgres.podcert.ate.dev/substrate_owner_user.pem" \\
+  --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+\`\`\`
+
+kagent-controller's own \`database.postgres.bundled\` feature (always enabled below) shares this
+same instance rather than deploying its own. Unlike substrate's own ate-api-server (separate
+servicedns/postgres volumes), kagent's chart projects everything -- client certs and the
+service-dns trust bundle alike -- into one \`postgres-client-certificate\` volume at
+\`/run/postgres.podcert.ate.dev\`, so \`sslrootcert\` points there too, not at substrate's own
+\`/run/servicedns.podcert.ate.dev\` path (confirmed live: pointing it there makes pgx's
+ParseConfig fail reading the missing file, surfacing only as "invalid PostgreSQL connection
+string"). Also undocumented by Solo (confirmed live, 2026-10-31): the substrate chart's own
+\`postgres\` NetworkPolicy admits only pods labeled \`app=ate-api-server\`, so a supplementary
+policy is needed for kagent-controller specifically.
+
+Bootstrap its \`kagent_owner\`/\`kagent_readwrite\` roles and \`kagent\` schema with the same generic
+SQL, different variables (the controller applies its own migrations into that schema at
+startup), then create its two connection-string Secrets -- note the namespace is
+\`$KAGENT_NAMESPACE\`, not \`$SUBSTRATE_NAMESPACE\`, since Secrets resolve in the consuming pod's
+own namespace:
+
+\`\`\`bash
+kubectl --context ${ctx} exec -i -n $SUBSTRATE_NAMESPACE postgres-0 -c postgres -- psql \\
+  --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres --dbname atepg \\
+  --set=substrate_schema=kagent \\
+  --set=substrate_owner_role=kagent_owner --set=substrate_owner_user=kagent_owner_user --set=substrate_owner_password= \\
+  --set=substrate_readwrite_role=kagent_readwrite --set=substrate_readwrite_user=kagent_readwrite_user --set=substrate_readwrite_password= \\
+  < addons/kagent/config/postgres-setup.sql
+
+kubectl --context ${ctx} create secret generic kagent-postgres-readwrite -n $KAGENT_NAMESPACE \\
+  --from-literal=readWriteConnectionString="postgresql://kagent_readwrite_user@postgres.$SUBSTRATE_NAMESPACE.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/postgres.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/kagent_readwrite_user.pem&sslkey=/run/postgres.podcert.ate.dev/kagent_readwrite_user.pem" \\
+  --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+kubectl --context ${ctx} create secret generic kagent-postgres-owner -n $KAGENT_NAMESPACE \\
+  --from-literal=ownerConnectionString="postgresql://kagent_owner_user@postgres.$SUBSTRATE_NAMESPACE.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/postgres.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/kagent_owner_user.pem&sslkey=/run/postgres.podcert.ate.dev/kagent_owner_user.pem" \\
+  --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+\`\`\`
+
+Label \`$KAGENT_NAMESPACE\` so the controller can also reach ate-api-server itself -- documented
+(docs.solo.io/kagent/1.0.x/setup/installation/#install-kagent), admitted by ate-api-server's own
+NetworkPolicy -- and apply the supplementary postgres NetworkPolicy mentioned above:
+
+\`\`\`bash
+kubectl --context ${ctx} label namespace $KAGENT_NAMESPACE ate.dev/api-access=true --overwrite
+
+kubectl --context ${ctx} apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kagent-controller-postgres-access
+  namespace: $SUBSTRATE_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: $KAGENT_NAMESPACE
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kagent-enterprise
+              app.kubernetes.io/component: controller
+      ports:
+        - port: postgres
+          protocol: TCP
+EOF
+\`\`\`
+
+Install the CRDs chart next -- the main release's manifest includes CRs (e.g. the
+"gvisor-default" SandboxConfig) of kinds it defines, which fail to apply if the CRDs aren't
+registered yet:
+
+\`\`\`bash
+helm upgrade --install substrate-crds \\
+  ${SUBSTRATE_CRDS_OCI} \\
+  --namespace $SUBSTRATE_NAMESPACE \\
+  --version $SUBSTRATE_VERSION \\
+  --create-namespace \\
+  --wait \\
+  --kube-context ${ctx}
+\`\`\`
 
 Install the standalone substrate release. \`--wait=false\` is intentional -- the chart doesn't
 create the cryptographic Secrets its pods need to become Ready; those come next.
@@ -391,22 +615,10 @@ kubectl annotate serviceaccount ate-api-server -n $SUBSTRATE_NAMESPACE \\
 `
     : ''
 }
-Download \`kubectl-ate\`, the CLI used to bootstrap substrate's cryptographic pools:
+Create the remaining 3 cryptographic pools the chart doesn't create (idempotent -- skip any that
+already exist as Kubernetes Secrets; \`kubectl-ate\` was already downloaded above):
 
 \`\`\`bash
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-curl -fsSL -o kubectl-ate \\
-  "https://github.com/kagent-dev/substrate/releases/download/$KUBECTL_ATE_VERSION/kubectl-ate-\${OS}-\${ARCH}" &&
-  chmod +x kubectl-ate
-\`\`\`
-
-Create the five cryptographic pools the chart doesn't create (idempotent -- skip any that already
-exist as Kubernetes Secrets):
-
-\`\`\`bash
-./kubectl-ate admin make-ca-pool  --ca-id=1  --name=service-dns-ca-pool  --secret-namespace=${PODCERT_NAMESPACE} --context=${ctx}
-./kubectl-ate admin make-ca-pool  --ca-id=1  --name=pod-identity-ca-pool --secret-namespace=${PODCERT_NAMESPACE} --context=${ctx}
 ./kubectl-ate admin make-jwt-pool --key-id=1 --name=actor-id-jwt-pool    --secret-namespace=$SUBSTRATE_NAMESPACE --context=${ctx}
 ./kubectl-ate admin make-ca-pool  --ca-id=1  --name=actor-id-ca-pool     --secret-namespace=$SUBSTRATE_NAMESPACE --context=${ctx}
 ./kubectl-ate admin make-ca-pool  --ca-id=1  --name=egress-mitm-ca-pool  --secret-namespace=$SUBSTRATE_NAMESPACE --context=${ctx} --key-type=ECDSAP256
@@ -438,8 +650,7 @@ else
   IN_CLUSTER_AUTH_LINES=''
 fi
 
-kubectl --context ${ctx} create configmap ate-api-authentication -n $SUBSTRATE_NAMESPACE --from-literal=authentication.yaml="actorIdentityJWTProvider: kubernetes
-jwtProviders:
+kubectl --context ${ctx} create configmap ate-api-authentication -n $SUBSTRATE_NAMESPACE --from-literal=authentication.yaml="jwtProviders:
 - name: kubernetes
   issuer: $ISSUER
   audiences: [api.${substrateNs}.svc]
@@ -568,6 +779,82 @@ kagent UI available at: **https://${hostname}**
 `;
   }
 
+  let rbacPolicyBlock = '';
+  if (rbacPolicyStep) {
+    const grant = (name, resource, accessLevel) =>
+      `    - name: ${name}\n      resource: kagent:${resource}\n      accessLevel: ${accessLevel}`;
+    const catalogManageGrants = RBAC_CATALOG_RESOURCES.map(r =>
+      grant(`manage-${r}`, r, 'manage')
+    ).join('\n');
+    const catalogViewGrants = [
+      ...RBAC_CATALOG_RESOURCES.map(r => grant(`view-${r}`, r, 'view')),
+      grant('view-traces', 'traces', 'view'),
+    ].join('\n');
+
+    rbacPolicyBlock = `
+
+**Step ${rbacPolicyStep} â€” Apply catalog RBAC (EnterpriseKagentRBACPolicy):**
+
+With zero policies, every authenticated caller can view and manage every catalog resource (the
+chart's own default-allow). Creating any policy flips the whole cluster to default-deny
+immediately, including for admins, unless a matching policy exists -- apply the admins policy
+first for that reason. Principals match the \`groups\` token claim (the chart's own default,
+\`enterprise.rbac.groupsClaim\`); the keycloak addon's own group-membership mapper already emits a
+claim literally named \`Groups\`, so no Helm-side override is needed.
+
+\`\`\`bash
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: kagent-enterprise.solo.io/v1alpha1
+kind: EnterpriseKagentRBACPolicy
+metadata:
+  name: kagent-admins-manage-all
+  namespace: $KAGENT_NAMESPACE
+spec:
+  principals:
+    - all:
+        - attribute: groups
+          values: ["${adminsGroup}"]
+  grants:
+    - name: manage-all
+      resource: kagent:*
+      accessLevel: manage
+EOF
+
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: kagent-enterprise.solo.io/v1alpha1
+kind: EnterpriseKagentRBACPolicy
+metadata:
+  name: kagent-writers-manage-catalog
+  namespace: $KAGENT_NAMESPACE
+spec:
+  principals:
+    - all:
+        - attribute: groups
+          values: ["${writersGroup}", "${agentregistryGroup}"]
+  grants:
+${catalogManageGrants}
+EOF
+
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: kagent-enterprise.solo.io/v1alpha1
+kind: EnterpriseKagentRBACPolicy
+metadata:
+  name: kagent-readers-view-catalog
+  namespace: $KAGENT_NAMESPACE
+spec:
+  principals:
+    - all:
+        - attribute: groups
+          values: ["${readersGroup}"]
+  grants:
+${catalogViewGrants}
+EOF
+\`\`\`
+
+Readers get \`kagent:traces\` (metadata/graphs) but never \`kagent:traces:payloads\` -- that would
+expose every user's prompt/response/tool text.`;
+  }
+
   // Order matches deploy(): controller install, then _registerClusters(), then
   // _labelGlobalServices() (the latter needs the controller Service to already exist).
   const registerClusters = Array.isArray(cfg.registerClusters) ? cfg.registerClusters : [];
@@ -657,7 +944,7 @@ ${substrateBlock}${oidcSecretBlock}${uiExposureBlock}**Step ${controllerStep} â€
 \`\`\`bash
 ${controllerCmd}
 \`\`\`
-${registerBlock}${globalServicesBlock}${waypointTrustDomainBlock}
+${rbacPolicyBlock}${registerBlock}${globalServicesBlock}${waypointTrustDomainBlock}
 
 Verify kagent is running:
 
@@ -716,6 +1003,8 @@ export function cleanup(addonCfg, clusterName) {
       `# order. GCS bucket contents (if that backend was used) are not deleted here -- cross-session\n` +
       `# data, left for manual cleanup.\n` +
       `helm uninstall substrate -n ${substrateNs} --kube-context ${ctx}\n` +
+      `helm uninstall substrate-crds -n ${substrateNs} --kube-context ${ctx}\n` +
+      `helm uninstall substrate-podcert -n ${PODCERT_NAMESPACE} --kube-context ${ctx}\n` +
       `kubectl delete namespace ${substrateNs} --context ${ctx} --ignore-not-found\n` +
       `kubectl delete namespace ${PODCERT_NAMESPACE} --context ${ctx} --ignore-not-found\n` +
       `rm -f substrate-values.yaml actor-id-ca.crt kubectl-ate\n`

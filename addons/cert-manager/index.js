@@ -21,12 +21,14 @@ const CERT_MANAGER_CHART_VERSION = '1.20.2';
  *   enabled: boolean,
  *   staging: boolean,
  *   email: string,
- *   provider: string,          // 'route53' (default) | 'clouddns'
+ *   provider: string,          // 'route53' (default) | 'clouddns' | 'cloudflare'
  *   region: string,            // route53 only. Default: 'us-east-1'
  *   project: string,           // clouddns only. Required (or GCP_PROJECT env var)
  *   gcpServiceAccount: string, // clouddns only -- GSA email for the Workload Identity
  *                              // annotation on the controller's ServiceAccount (ADC, no key file)
  * }
+ * // cloudflare has no ambient-credential mechanism like IRSA/Workload Identity -- the API
+ * // token is read from CLOUDFLARE_API_TOKEN and stored in a Secret the solver references.
  */
 export class CertManagerFeature extends AddonFeature {
   constructor(name, config) {
@@ -44,10 +46,19 @@ export class CertManagerFeature extends AddonFeature {
     this.letsencryptRegion = config.letsencrypt?.region || 'us-east-1';
     this.letsencryptProject = config.letsencrypt?.project || process.env.GCP_PROJECT || null;
     this.gcpServiceAccount = config.letsencrypt?.gcpServiceAccount || null;
+    this.cloudflareApiTokenSecretName = 'cert-manager-cloudflare-api-token';
     this.kubeContext = config.kubeContext || null;
   }
 
   validate() {
+    if (
+      this.letsencryptEnabled &&
+      !['route53', 'clouddns', 'cloudflare'].includes(this.letsencryptProvider)
+    ) {
+      throw new Error(
+        `cert-manager: letsencrypt.provider '${this.letsencryptProvider}' not supported. Supported: route53, clouddns, cloudflare.`
+      );
+    }
     if (
       this.letsencryptEnabled &&
       this.letsencryptProvider === 'clouddns' &&
@@ -55,6 +66,15 @@ export class CertManagerFeature extends AddonFeature {
     ) {
       throw new Error(
         'cert-manager: letsencrypt.project (or GCP_PROJECT environment variable) is required for letsencrypt.provider=clouddns'
+      );
+    }
+    if (
+      this.letsencryptEnabled &&
+      this.letsencryptProvider === 'cloudflare' &&
+      !process.env.CLOUDFLARE_API_TOKEN
+    ) {
+      throw new Error(
+        'cert-manager: CLOUDFLARE_API_TOKEN environment variable is required for letsencrypt.provider=cloudflare'
       );
     }
     return true;
@@ -80,6 +100,9 @@ export class CertManagerFeature extends AddonFeature {
     await this.createSelfSignedIssuer();
 
     if (this.letsencryptEnabled && this.letsencryptEmail) {
+      if (this.letsencryptProvider === 'cloudflare') {
+        await this.createCloudflareApiTokenSecret();
+      }
       await this.createLetsEncryptDnsIssuer();
     }
 
@@ -248,9 +271,29 @@ export class CertManagerFeature extends AddonFeature {
   }
 
   /**
-   * Create Let's Encrypt DNS-01 ClusterIssuer for Route53 (IRSA) or Google Cloud DNS
-   * (Workload Identity). Both use ambient cloud credentials on the controller's
-   * ServiceAccount -- no explicit keys/secrets in either solver.
+   * Reconcile the Secret the cloudflare DNS-01 solver's apiTokenSecretRef points at. Always
+   * re-applied (not skip-if-exists) since the token can rotate.
+   */
+  async createCloudflareApiTokenSecret() {
+    this.log('Reconciling Cloudflare API token secret...', 'info');
+
+    const ctxFlag = this.kubeContext ? `--context=${this.kubeContext}` : '';
+    const ctxStr = ctxFlag ? `${ctxFlag} ` : '';
+
+    const result = await CommandRunner.exec(
+      `kubectl ${ctxStr}create secret generic ${this.cloudflareApiTokenSecretName} -n ${this.certManagerNamespace} --from-literal=api-token="${process.env.CLOUDFLARE_API_TOKEN}" --dry-run=client -o yaml | kubectl ${ctxStr}apply -f -`,
+      { ignoreError: true }
+    );
+    if (result.exitCode) {
+      throw new Error(
+        `Failed to reconcile ${this.cloudflareApiTokenSecretName}: ${result.stderr?.trim()}`
+      );
+    }
+  }
+
+  /**
+   * Create Let's Encrypt DNS-01 ClusterIssuer for Route53 (IRSA), Google Cloud DNS (Workload
+   * Identity), or Cloudflare (API token Secret, no ambient-credential mechanism available).
    */
   async createLetsEncryptDnsIssuer() {
     const acmeServer = this.letsencryptStaging
@@ -263,7 +306,13 @@ export class CertManagerFeature extends AddonFeature {
     const dns01 =
       this.letsencryptProvider === 'clouddns'
         ? { cloudDNS: { project: this.letsencryptProject } }
-        : { route53: { region: this.letsencryptRegion } };
+        : this.letsencryptProvider === 'cloudflare'
+          ? {
+              cloudflare: {
+                apiTokenSecretRef: { name: this.cloudflareApiTokenSecretName, key: 'api-token' },
+              },
+            }
+          : { route53: { region: this.letsencryptRegion } };
 
     const issuer = {
       apiVersion: 'cert-manager.io/v1',

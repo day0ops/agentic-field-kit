@@ -170,44 +170,41 @@ export class SubstrateAgentFeature extends Feature {
     return true;
   }
 
-  // buildWorkerPool returns a dedicated WorkerPool CR (ate.dev/v1alpha1) when
-  // workerImage is set, or undefined when it isn't -- backward-compatible
-  // with the original single-agent usage, which relies on the kagent addon's
-  // own Helm-templated `kagent-default` WorkerPool already existing. A custom
-  // workerPoolName (e.g. a swarm's own small pool) is never auto-created by
-  // anything else, so callers wanting one must supply workerImage.
+  // Returns a dedicated WorkerPool CR (ate.dev/v1) when workerImage is set, undefined
+  // otherwise -- backward-compatible with relying on the kagent addon's own
+  // `kagent-default` pool. A custom workerPoolName is never auto-created elsewhere, so
+  // callers wanting one must supply workerImage.
   //
-  // spec.sandboxClasses (a list) replaced the prior scalar spec.sandboxClass
-  // at Agent Substrate v0.6.0 -- this feature only ever needs one sandbox
-  // class, so it always builds a single-entry list.
-  //
-  // The `kagent.dev/worker-pool: <name>` label mirrors the kagent-enterprise
-  // Helm chart's own WorkerPool template exactly (charts/kagent-enterprise/
-  // templates/substrate-workerpool.yaml) -- kagent's own chart-created pools
-  // (e.g. kagent-default) always carry it. ate-api's scheduler filters
-  // candidate workers by the ActorTemplate's worker label selector
-  // (scheduling.Applies), so a WorkerPool missing whatever label that
-  // selector requires produces workers that read as healthy/FREE individually
-  // but are never eligible -- live-confirmed (2026-09-28) as
-  // ResourceExhausted: "no free workers available" on every resume attempt,
-  // regardless of replica count.
+  // The kagent.dev/worker-pool-name + -namespace labels must match the chart's own
+  // WorkerPool metadata exactly -- every compiled ActorTemplate's worker_selector
+  // requires this pair, and a mismatch leaves every worker ineligible (confirmed live).
   buildWorkerPool() {
     if (!this.workerImage) return undefined;
     return {
-      apiVersion: 'ate.dev/v1alpha1',
+      apiVersion: 'ate.dev/v1',
       kind: 'WorkerPool',
       metadata: {
         name: this.workerPoolName,
         namespace: this.namespace,
         labels: {
           'app.kubernetes.io/managed-by': 'agentic-demo',
-          'kagent.dev/worker-pool': this.workerPoolName,
+          'kagent.dev/worker-pool-name': this.workerPoolName,
+          'kagent.dev/worker-pool-namespace': this.namespace,
         },
       },
       spec: {
         replicas: this.workerPoolReplicas,
         sandboxClasses: [{ name: this.sandboxClass }],
         workerImage: this.workerImage,
+        // Worker capacity is reported via its own resources.limits -- an unset budget
+        // reports zero room. Sized just above kagent-controller's per-actor default
+        // (1 CPU / 1Gi) so each worker can host exactly one actor at a time.
+        template: {
+          resources: {
+            requests: { cpu: '1100m', memory: '1280Mi' },
+            limits: { cpu: '1500m', memory: '1536Mi' },
+          },
+        },
       },
     };
   }
@@ -349,6 +346,26 @@ export class SubstrateAgentFeature extends Feature {
     }
     const workerPool = this.buildWorkerPool();
     if (workerPool) {
+      // atelet (the per-node sandbox agent) runs this pool's worker pods with hostPath
+      // volumes, AppArmor unconfined, and root -- any enforcing "baseline"/"restricted"
+      // PodSecurity default on this namespace silently blocks the WorkerPool controller
+      // from ever creating them ("would violate PodSecurity restricted:latest", confirmed
+      // live, 2026-10-31), which just leaves the Agent stuck on ActorTemplatePending
+      // forever with no further error. The kagent addon only relaxes this for its own
+      // ate-system namespace -- this feature's own dedicated WorkerPool can land in any
+      // namespace a use case configures (here, kagent-system), so it must ensure its own.
+      await this.applyResource({
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: {
+          name: this.namespace,
+          labels: {
+            'pod-security.kubernetes.io/enforce': 'privileged',
+            'pod-security.kubernetes.io/audit': 'privileged',
+            'pod-security.kubernetes.io/warn': 'privileged',
+          },
+        },
+      });
       await this.applyResource(workerPool);
     }
     await this.applyResource(this.buildHarness());

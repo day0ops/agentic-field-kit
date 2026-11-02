@@ -71,28 +71,22 @@ spec:
 
   kagent:
     scheme: https
-    # 1.0.0-alpha12 moved the CRD group from `kagent.dev` to `api.kagent.dev` and replaced
-    # Harness.allowedAgentTemplates (a label selector) with an explicit per-agent `Agent` CRD
-    # pairing a Harness to an AgentTemplate -- substrate-agent's buildHarness()/buildAgents()
-    # targets this shape directly, see that feature's class doc comment. Paired with substrate
-    # 0.6.0-b15382d4 below (confirmed via enterprise-kagent's own v1.0.0-alpha12 tag, which pins
-    # that exact substrate module version in its controller's go.mod).
-    version: 1.0.0-alpha12
+    version: 1.0.0-rc1
 
   # Agent Substrate chart version
   substrate:
-    # 0.6.0-b15382d4 is alpha12's natively paired substrate version (see the kagent.version
-    # comment above). WorkerPool.spec.sandboxClass (scalar) became spec.sandboxClasses (a
-    # required list) at this version -- substrate-agent's buildWorkerPool() targets this shape.
-    version: 0.6.0-b15382d4
+    version: 1.0.0-rc.1-76ace06f
     registry: oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm
+    kubectlAteVersion: v1.0.0-rc1
 
   soloUi:
     version: 0.5.7
 
   images:
-    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...).
-    kagentHarness: ghcr.io/kagent-dev/kagent/golang-adk@sha256:0ef67974d39518b18de074bd9762fb4aea9764fc8836eeb45d7868b358eecb30
+    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...). Must track
+    # kagent.version's release line -- a stale digest fails ActorTemplate's /config
+    # materialization at rc1.
+    kagentHarness: ghcr.io/kagent-dev/kagent/golang-adk@sha256:5b06741be8cb69c9293477bdbf3203c6526127c533fa940fd9f595a82a801701
     finflow:
       marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.2
       newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.2

@@ -32,9 +32,7 @@ describe('agora-console', () => {
     const d = f.buildConsoleDeployment();
     expect(d.kind).toBe('Deployment');
     expect(d.metadata.name).toBe('console');
-    expect(d.spec.template.spec.containers[0].image).toBe(
-      'example.com/agora-demo/console:v0.1.0'
-    );
+    expect(d.spec.template.spec.containers[0].image).toBe('example.com/agora-demo/console:v0.1.0');
     const env = d.spec.template.spec.containers[0].env;
     expect(env).toContainEqual({ name: 'PORT', value: '18090' });
     expect(env).toContainEqual({
@@ -68,16 +66,22 @@ describe('agora-console', () => {
     expect(f.buildGatewayParameters()).toBeUndefined();
   });
 
-  it('builds an HTTPRoute pointing at the console Service', () => {
+  it('builds an HTTPRoute with a public rule and a gated /account rule, both pointing at the console Service', () => {
     const r = f.buildHTTPRoute();
     expect(r.kind).toBe('HTTPRoute');
     expect(r.spec.hostnames).toEqual(['agora.example.com']);
-    expect(r.spec.rules[0].backendRefs[0]).toEqual({
-      group: '',
-      kind: 'Service',
-      name: 'console',
-      port: 18090,
-    });
+    expect(r.spec.rules).toEqual([
+      {
+        name: 'public',
+        matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+        backendRefs: [{ group: '', kind: 'Service', name: 'console', port: 18090 }],
+      },
+      {
+        name: 'gated',
+        matches: [{ path: { type: 'PathPrefix', value: '/account' } }],
+        backendRefs: [{ group: '', kind: 'Service', name: 'console', port: 18090 }],
+      },
+    ]);
   });
 
   it('validate throws when a required field is missing', () => {
@@ -107,5 +111,35 @@ describe('agora-console with sourceRanges', () => {
   it('references the GatewayParameters from the Gateway', () => {
     const g = f.buildGateway();
     expect(g.spec.infrastructure.parametersRef.name).toBe('agora-console-https-params');
+  });
+});
+
+describe('agora-console with exposeDirectly: false', () => {
+  const f = new AgoraConsoleFeature('agora-console', {
+    namespace: 'agora-demo',
+    catalogApiImage: 'example.com/agora-demo/catalog-api:v0.1.0',
+    consoleImage: 'example.com/agora-demo/console:v0.1.0',
+    hostname: 'agora.example.com',
+    exposeDirectly: false,
+  });
+
+  it('skips building its own Gateway/Certificate/HTTPRoute', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.deleteResource = async () => {};
+    f.log = () => {};
+    await f.deploy();
+    expect(applied).toEqual(['Deployment', 'Service', 'Deployment', 'Service']);
+    expect(applied).not.toContain('Certificate');
+    expect(applied).not.toContain('Gateway');
+    expect(applied).not.toContain('HTTPRoute');
+  });
+
+  it('skips deleting its own Gateway/Certificate/HTTPRoute on cleanup', async () => {
+    const deleted = [];
+    f.deleteResource = async kind => deleted.push(kind);
+    f.log = () => {};
+    await f.cleanup();
+    expect(deleted).toEqual(['service', 'deployment', 'service', 'deployment']);
   });
 });

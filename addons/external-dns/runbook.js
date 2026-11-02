@@ -54,11 +54,21 @@ The KSA annotation (\`iam.gke.io/gcp-service-account=${gsa}\`) is set by each ad
 
 export function envVarsFor(addonCfg, _clusterName) {
   const cfg = addonCfg.config || {};
-  if ((cfg.provider || 'route53') === 'google' && !cfg.project) {
+  const provider = cfg.provider || 'route53';
+  if (provider === 'google' && !cfg.project) {
     return [
       {
         name: 'GCP_PROJECT',
         description: 'GCP project the Cloud DNS zone lives in',
+        required: true,
+      },
+    ];
+  }
+  if (provider === 'cloudflare') {
+    return [
+      {
+        name: 'CLOUDFLARE_API_TOKEN',
+        description: 'Cloudflare API token with DNS edit permission on the target zone',
         required: true,
       },
     ];
@@ -143,6 +153,40 @@ ${commonArgs} \\
 \`\`\`
 
 > \`${gsa}\` must be bound to \`roles/dns.admin\` and to the external-dns Kubernetes ServiceAccount via Workload Identity (\`gcloud iam service-accounts add-iam-policy-binding ... --role=roles/iam.workloadIdentityUser --member="serviceAccount:${project}.svc.id.goog[${ns}/external-dns]"\`). No key file -- ADC via the annotated ServiceAccount. \`sources[2]=gateway-httproute\` is required for Ambient mesh Gateway API routes.`;
+  }
+
+  if (provider === 'cloudflare') {
+    const proxied = cfg.proxied === true;
+    // --cloudflare-proxied is a bare/presence flag -- `=false` fails to parse, and false is
+    // already the default, so the flag is only included at all when proxying is wanted.
+    const proxiedArg = proxied ? '\n  --set "extraArgs[0]=--cloudflare-proxied" \\' : '';
+
+    return `Install external-dns on the **${clusterName}** cluster for automatic Cloudflare DNS record management.
+
+\`\`\`bash
+kubectl create secret generic external-dns-cloudflare-api-token \\
+  --context ${ctx} \\
+  -n ${ns} \\
+  --from-literal=api-token="$CLOUDFLARE_API_TOKEN" \\
+  --dry-run=client -o yaml | kubectl apply --context ${ctx} -f -
+
+helm repo add external-dns https://kubernetes-sigs.github.io/external-dns/
+helm repo update
+
+helm upgrade --install external-dns external-dns/external-dns \\
+  --kube-context ${ctx} \\
+  --namespace ${ns} \\
+  --create-namespace \\
+  --version $EXTERNAL_DNS_VERSION \\
+  --set provider.name=cloudflare \\
+  --set "env[0].name=CF_API_TOKEN" \\
+  --set env[0].valueFrom.secretKeyRef.name=external-dns-cloudflare-api-token \\
+  --set env[0].valueFrom.secretKeyRef.key=api-token \\${proxiedArg}
+${commonArgs} \\
+  --wait
+\`\`\`
+
+> Cloudflare has no ambient-credential mechanism (unlike IRSA/Workload Identity), so the API token is stored in a Secret the chart reads via \`CF_API_TOKEN\`. Proxying is off by default (the flag is only added when \`proxied: true\`), which is required whenever the target is a private/cluster-local IP -- Cloudflare's proxy can't reach it. \`sources[2]=gateway-httproute\` is required for Ambient mesh Gateway API routes.`;
   }
 
   const region = tpl(cfg.region, null) || '$AWS_REGION';

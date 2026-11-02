@@ -66,6 +66,21 @@ export function envVarsFor(addonCfg, _clusterName) {
       vars.push({ name: envVar, description, required: true });
     }
   }
+  // Per-user, not per-realm: demo-buyer/demo-seller/demo-operator share the 'kagent' realm
+  // with kagent-admin/writer/reader but need their own password, independent of that realm's.
+  if (
+    (addonCfg?.config?.realms || []).some(r =>
+      (r.users || []).some(
+        u => u.username === 'demo-buyer' || u.username === 'demo-seller' || u.username === 'demo-operator'
+      )
+    )
+  ) {
+    vars.push({
+      name: 'AGORA_CUSTOMER_PASSWORD',
+      description: 'demo-buyer/demo-seller/demo-operator password',
+      required: true,
+    });
+  }
   for (const realm of addonCfg?.config?.realms || []) {
     for (const idp of realm.identityProviders || []) {
       if (idp.clientSecretEnvVar) {
@@ -317,6 +332,13 @@ kubectl wait certificate/${tlsSecretName} -n ${ns} \\
       agentregistry: 'AGENTREGISTRY_REALM_DEFAULT_PASSWORD',
     };
     const passwordEnvVar = REALM_PASSWORD_ENV_VARS[realm.realm];
+    // Per-user, not per-realm: overrides passwordEnvVar for specific usernames sharing a
+    // realm with others whose password shouldn't move together with theirs.
+    const USER_PASSWORD_ENV_VARS = {
+      'demo-buyer': 'AGORA_CUSTOMER_PASSWORD',
+      'demo-seller': 'AGORA_CUSTOMER_PASSWORD',
+      'demo-operator': 'AGORA_CUSTOMER_PASSWORD',
+    };
     const userLines = users
       .map(u => {
         if (isGrafanaRealm) {
@@ -325,8 +347,9 @@ kubectl wait certificate/${tlsSecretName} -n ${ns} \\
         -H "Content-Type: application/json" \\
         -d '{"username":"'"\${GRAFANA_REALM_ADMIN_USERNAME:-grafana-admin}"'","email":"${u.email || ''}","enabled":true,"credentials":[{"type":"password","value":"'"$GRAFANA_REALM_ADMIN_PASSWORD"'","temporary":false}]}'`;
         }
-        const passwordValue = passwordEnvVar
-          ? `'"$${passwordEnvVar}"'`
+        const resolvedPasswordEnvVar = USER_PASSWORD_ENV_VARS[u.username] || passwordEnvVar;
+        const passwordValue = resolvedPasswordEnvVar
+          ? `'"$${resolvedPasswordEnvVar}"'`
           : realm.defaultPassword || '';
         return `      curl -s -X POST "$KEYCLOAK_URL/admin/realms/${realm.realm}/users" \\
         -H "Authorization: Bearer $ACCESS_TOKEN" \\

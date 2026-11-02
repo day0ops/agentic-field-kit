@@ -153,16 +153,19 @@ describe('substrate-agent swarm', () => {
   });
   it('builds a dedicated WorkerPool with a sandboxClasses list when workerImage is set', () => {
     const wp = f.buildWorkerPool();
-    expect(wp.apiVersion).toBe('ate.dev/v1alpha1');
+    expect(wp.apiVersion).toBe('ate.dev/v1');
     expect(wp.kind).toBe('WorkerPool');
     expect(wp.metadata.name).toBe('fraud-workers');
     expect(wp.spec.replicas).toBe(2);
     expect(wp.spec.workerImage).toBe('ghcr.io/kagent-dev/substrate/ateom-gvisor:v0.6.0-b15382d4');
     expect(wp.spec.sandboxClasses).toEqual([{ name: 'gvisor' }]);
     expect(wp.spec.sandboxClass).toBeUndefined();
-    // Mirrors the kagent-enterprise chart's own WorkerPool label exactly --
-    // ate-api's scheduler filters candidate workers by this selector.
-    expect(wp.metadata.labels['kagent.dev/worker-pool']).toBe('fraud-workers');
+    // Must match the chart's own WorkerPool label pair -- every compiled worker_selector
+    // requires it.
+    expect(wp.metadata.labels['kagent.dev/worker-pool-name']).toBe('fraud-workers');
+    expect(wp.metadata.labels['kagent.dev/worker-pool-namespace']).toBe('kagent');
+    expect(wp.spec.template.resources.requests.cpu).toBe('1100m');
+    expect(wp.spec.template.resources.limits.cpu).toBe('1500m');
   });
 });
 

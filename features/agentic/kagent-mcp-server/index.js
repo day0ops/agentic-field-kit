@@ -41,6 +41,19 @@ import { Feature } from '../../../src/lib/feature.js';
  *   env: [{name: string, value: string}], // Optional -- extra container env vars, e.g. CATALOG_API_URL.
  *                                          // Only applies to the default (non-legacy) Deployment path -
  *                                          // ignored when legacyNativeMcpServer is true.
+ *   tokenPassthrough: boolean, // Default: false -- sets RemoteMCPServer.spec.tokenPassthrough.
+ *                              // Without it, kagent-controller calls this server anonymously
+ *                              // (confirmed live: no Authorization header reaches it at all).
+ *                              // true forwards the end user's own validated token instead - only
+ *                              // meaningful when gatewayUrl is also set, since the plain
+ *                              // ClusterIP Service has nothing to validate or exchange a
+ *                              // forwarded token against.
+ *   gatewayUrl: string,        // Optional -- overrides RemoteMCPServer.spec.url with an
+ *                              // agentgateway-fronted hostname (e.g. a mcp-gateway-route
+ *                              // feature step's route) instead of this server's own bare
+ *                              // ClusterIP Service URL. Needed for tokenPassthrough to reach
+ *                              // anything that actually validates/exchanges the forwarded
+ *                              // token - the bare Service has no such enforcement at all.
  * }
  */
 export class KagentMcpServerFeature extends Feature {
@@ -54,6 +67,8 @@ export class KagentMcpServerFeature extends Feature {
     this.description = config.description || `MCP server '${this.serverName}'`;
     this.legacyNativeMcpServer = config.legacyNativeMcpServer === true;
     this.env = config.env || [];
+    this.tokenPassthrough = config.tokenPassthrough === true;
+    this.gatewayUrl = config.gatewayUrl || null;
   }
 
   validate() {
@@ -155,8 +170,11 @@ export class KagentMcpServerFeature extends Feature {
       },
       spec: {
         description: this.description,
-        url: `http://${this.serverName}.${this.namespace}.svc.cluster.local:${this.port}${this.path}`,
+        url:
+          this.gatewayUrl ||
+          `http://${this.serverName}.${this.namespace}.svc.cluster.local:${this.port}${this.path}`,
         protocol: 'STREAMABLE_HTTP',
+        ...(this.tokenPassthrough && { tokenPassthrough: true }),
       },
     };
   }

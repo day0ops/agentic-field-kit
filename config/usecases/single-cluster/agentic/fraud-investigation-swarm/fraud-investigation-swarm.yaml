@@ -47,7 +47,7 @@ spec:
         workerPoolName: fraud-workers
         # Must match the substrate chart version (env.substrate.version) exactly -- see
         # addons/kagent/index.js's own derivation for the default kagent-default pool.
-        workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateom-gvisor:v{{env.substrate.version}}'
+        workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v{{env.substrate.version}}'
         workerPoolReplicas: 2
         modelConfigRef: default-model-config
         snapshots:

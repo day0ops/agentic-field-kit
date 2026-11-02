@@ -15,7 +15,7 @@ spec:
         serverName: bids-mcp
         namespace: kagent-system
         image: '{{env.images.agoraDemo.bidsMcp}}'
-        port: 9101
+        port: 9120
         env:
           - name: CATALOG_API_URL
             value: http://catalog-api.kagent-system.svc.cluster.local:18080
@@ -25,7 +25,7 @@ spec:
         serverName: orders-mcp
         namespace: kagent-system
         image: '{{env.images.agoraDemo.ordersMcp}}'
-        port: 9102
+        port: 9122
         env:
           - name: CATALOG_API_URL
             value: http://catalog-api.kagent-system.svc.cluster.local:18080
@@ -35,7 +35,7 @@ spec:
         serverName: pricing-mcp
         namespace: kagent-system
         image: '{{env.images.agoraDemo.pricingMcp}}'
-        port: 9103
+        port: 9121
         env:
           - name: CATALOG_API_URL
             value: http://catalog-api.kagent-system.svc.cluster.local:18080
@@ -45,7 +45,7 @@ spec:
         serverName: trust-mcp
         namespace: kagent-system
         image: '{{env.images.agoraDemo.trustMcp}}'
-        port: 9104
+        port: 9123
         env:
           - name: CATALOG_API_URL
             value: http://catalog-api.kagent-system.svc.cluster.local:18080
@@ -57,7 +57,7 @@ spec:
         namespace: kagent-system
         image: '{{env.images.kagentHarness}}'
         workerPoolName: agora-workers
-        workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateom-gvisor:v{{env.substrate.version}}'
+        workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v{{env.substrate.version}}'
         workerPoolReplicas: 2
         modelConfigRef: default-model-config
         snapshots:
@@ -83,12 +83,12 @@ spec:
             systemPrompt: >-
               You place and withdraw bids and manage auto-bid ceilings via your tools only -
               never report a bid as placed, withdrawn, or adjusted unless the tool call
-              confirmed it. For any bid you consider high-value, delegate to trust-safety for a
-              pre-bid risk check before placing it.
+              confirmed it. For any bid you consider high-value, run a pre-bid risk check via
+              your trust tool before placing it - never state a risk result you did not receive
+              from that tool call.
             tools:
               - mcp: bids-mcp
-              - agent: trust-safety
-                description: Pre-bid risk check on a high-value bid
+              - mcp: trust-mcp
           - name: listing-pricing-assistant
             description: Seller-facing concierge - drafts listings, suggests pricing
             systemPrompt: >-

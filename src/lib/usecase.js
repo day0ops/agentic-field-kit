@@ -545,19 +545,30 @@ export class UseCaseManager {
   }
 
   /**
-   * Build a template context from spec.infra for {{env.*}} resolution in feature configs.
-   * Returns null if no infra or environment is resolvable.
+   * Build a template context for {{env.*}}/{{infra.*}} resolution in feature configs.
+   * Prefers spec.environment directly (bring-your-own cluster, no Terraform-provisioned
+   * infra -- same convention Profile already uses for its own spec.environment), falling
+   * back to deriving the environment from spec.infra's own infra profile. Returns null if
+   * neither is set or the environment isn't resolvable.
    */
-  static async buildTemplateContext(specInfra) {
-    if (!specInfra) return null;
+  static async buildTemplateContext(spec) {
+    if (!spec) return null;
     try {
-      const infraPath = join(PROJECT_ROOT, 'config', 'infra', `${specInfra}.yaml`);
-      if (!existsSync(infraPath)) return null;
-      const infraProfile = yaml.load(await readFile(infraPath, 'utf8'));
-      const envName = infraProfile?.spec?.environment;
-      if (!envName) return null;
-      const environment = await EnvironmentManager.load(envName);
-      const infraState = await InfraStateManager.load(specInfra);
+      let environment;
+      let infraState = null;
+      if (spec.environment) {
+        environment = await EnvironmentManager.load(spec.environment);
+      } else if (spec.infra) {
+        const infraPath = join(PROJECT_ROOT, 'config', 'infra', `${spec.infra}.yaml`);
+        if (!existsSync(infraPath)) return null;
+        const infraProfile = yaml.load(await readFile(infraPath, 'utf8'));
+        const envName = infraProfile?.spec?.environment;
+        if (!envName) return null;
+        environment = await EnvironmentManager.load(envName);
+        infraState = await InfraStateManager.load(spec.infra);
+      } else {
+        return null;
+      }
       return TemplateResolver.buildContext(
         { name: '', context: '', role: '' },
         environment,
@@ -686,7 +697,7 @@ export class UseCaseManager {
         await this.ensureKubeconfigsLoaded(spec.infra);
       }
 
-      const templateContext = await this.buildTemplateContext(spec.infra);
+      const templateContext = await this.buildTemplateContext(spec);
 
       // Record current use case before any deployment so cleanup works even if deployment fails
       await this.setCurrentUseCase(filePath);
@@ -833,7 +844,7 @@ export class UseCaseManager {
         await this.ensureKubeconfigsLoaded(spec.infra);
       }
 
-      const templateContext = await this.buildTemplateContext(spec.infra);
+      const templateContext = await this.buildTemplateContext(spec);
       const requiredApps = spec.requires?.applications || [];
       const specLevelClusters = spec.clusters || null;
       const specLevelInfra = spec.infra || null;
@@ -998,7 +1009,7 @@ export class UseCaseManager {
     if (usecase.spec?.infra) {
       await this.ensureKubeconfigsLoaded(usecase.spec.infra);
     }
-    const templateContext = await this.buildTemplateContext(usecase.spec?.infra);
+    const templateContext = await this.buildTemplateContext(usecase.spec);
     const resolved = templateContext
       ? { ...usecase, spec: TemplateResolver.resolveValues(usecase.spec, templateContext) }
       : usecase;
