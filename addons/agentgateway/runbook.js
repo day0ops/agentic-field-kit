@@ -161,9 +161,7 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
       })()
     : [];
 
-  // UI: the enterprise-agentgateway-ui subchart, bundled with the main chart (ui.enabled).
-  // Client IDs are left at the chart defaults (enterprise-agentgateway-ui /
-  // enterprise-agentgateway-ui-backend) -- mirrors buildUiHelmArgs() in index.js exactly.
+  // UI: mirrors buildUiHelmArgs() in index.js exactly.
   const ui = cfg.ui?.enabled ? cfg.ui : null;
   const uiHostname = ui ? tpl(ui.hostname, null) : null;
   const uiTlsSecretName = ui?.tls?.secretName || 'agentgateway-ui-tls';
@@ -173,8 +171,7 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
         `  --set ui.enabled=true`,
         `  --set-string ui.oidc.issuer="${resolveRunbookTemplatesLiteral(ui.oidc.issuer, { env })}"`,
         `  --set-string ui.backend.oidc.secret="${ui.oidc.backendClientSecret}"`,
-        // Chart default reserves 2 CPUs for the UI's own bundled ClickHouse -- too much on a
-        // single-node demo cluster (mirrors the kagent addon's own clickhouse override).
+        // Mirrors the kagent addon's own clickhouse override (chart default is 2 CPUs).
         `  --set ui.clickhouse.resources.requests.cpu=300m`,
         ...(ui.oidc.roleMappings
           ? [`  --set-json 'ui.rbac.roleMapping.roleMappings=${JSON.stringify(ui.oidc.roleMappings)}'`]
@@ -410,8 +407,7 @@ EOF
 \`\`\``
     : '';
 
-  // UI: Certificate + Gateway + HTTPRoute fronting the enterprise-agentgateway-ui Service (port
-  // 80) -- that Service has no chart-native HTTPRoute support, unlike kagent-ui's alpha chart.
+  // UI: mirrors deployUiGateway() in index.js exactly.
   const uiGatewayBlock = ui
     ? `
 

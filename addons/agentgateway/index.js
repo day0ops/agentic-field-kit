@@ -56,9 +56,8 @@ export class AgentgatewayFeature extends AddonFeature {
     this.tracesCollectorName = config.tracesCollectorName || 'opentelemetry-collector-traces';
     this.tracesCollectorNamespace = config.tracesCollectorNamespace || 'telemetry';
     this.tracingRandomSampling = config.tracingRandomSampling !== false ? 'true' : 'false';
-    // The enterprise-agentgateway-ui subchart, bundled with the main chart (chart default:
-    // disabled). Unlike this.gateway, its Service has no chart-native HTTPRoute support, so the
-    // Gateway/Certificate/HTTPRoute fronting it are built here, same as kagent-ui's pattern.
+    // The enterprise-agentgateway-ui subchart (chart default: disabled). No chart-native
+    // HTTPRoute support, so Gateway/Certificate/HTTPRoute are built here, like kagent-ui's.
     this.ui = config.ui?.enabled
       ? {
           hostname: config.ui.hostname,
@@ -355,10 +354,8 @@ export class AgentgatewayFeature extends AddonFeature {
     ];
   }
 
-  // Sets the enterprise-agentgateway-ui subchart's own values (installed as part of this same
-  // release, per ui.enabled). Client IDs are left at the chart defaults
-  // (enterprise-agentgateway-ui / enterprise-agentgateway-ui-backend) -- the Keycloak clients
-  // backing this feature must use those exact IDs.
+  // Sets the enterprise-agentgateway-ui subchart's values. Client IDs stay at chart
+  // defaults -- Keycloak clients must match those exact IDs.
   buildUiHelmArgs() {
     const args = [
       '--set',
@@ -367,9 +364,8 @@ export class AgentgatewayFeature extends AddonFeature {
       `ui.oidc.issuer=${this.ui.oidcIssuer}`,
       '--set-string',
       `ui.backend.oidc.secret=${this.ui.backendClientSecret}`,
-      // Chart default reserves 2 CPUs for the UI's own bundled ClickHouse -- too much on a
-      // single-node demo cluster (matches the kagent addon's own clickhouse.resources
-      // override for the exact same reason). Limit stays at the chart default so it can burst.
+      // Chart default reserves 2 CPUs for the bundled ClickHouse -- too much for a demo
+      // cluster (same fix as the kagent addon's own clickhouse override).
       '--set',
       'ui.clickhouse.resources.requests.cpu=300m',
     ];
@@ -382,9 +378,8 @@ export class AgentgatewayFeature extends AddonFeature {
     return args;
   }
 
-  // Certificate + Gateway + HTTPRoute for the UI's HTTPS listener -- the subchart's Service
-  // (enterprise-agentgateway-ui, port 80) has no chart-native HTTPRoute support, unlike
-  // kagent-ui's alpha chart, so all three are built directly here.
+  // Certificate + Gateway + HTTPRoute for the UI's HTTPS listener -- no chart-native
+  // HTTPRoute support, unlike kagent-ui's alpha chart, so built directly here.
   async deployUiGateway() {
     const certName = this.ui.tlsSecretName;
     this.log(`Provisioning agentgateway UI certificate '${certName}'...`);

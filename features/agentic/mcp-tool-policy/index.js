@@ -4,16 +4,27 @@ import { CommandRunner } from '../../../src/lib/common.js';
 /**
  * McpToolPolicyFeature
  *
- * Applies one EnterpriseAgentgatewayPolicy with spec.backend.mcp.authorization,
- * targeting a single MCP server's live EnterpriseAgentgatewayBackend (discovered
- * by label, same pattern as token-exchange-policy's discoverBackendName -- the
- * per-server Backend name AgentRegistry creates is hash-suffixed and not
- * knowable ahead of time).
+ * Applies one EnterpriseAgentgatewayPolicy targeting a single MCP server's live
+ * EnterpriseAgentgatewayBackend (discovered by label, same pattern as
+ * token-exchange-policy's discoverBackendName -- the per-server Backend name
+ * AgentRegistry creates is hash-suffixed and not knowable ahead of time).
  *
  * Stage 4 of the guided tour (tool policy): a hard dollar cap on refund_payment
  * enforced at agentgateway itself, independent of what the calling agent's LLM
  * decides -- unlike Stage 3's ask_user threshold (which the LLM doesn't always
  * honor), this is a gateway-level backstop no agent instruction can talk around.
+ *
+ * Two mutually exclusive modes, selected by `mode`:
+ *
+ * - 'authorization' (default) -- spec.backend.mcp.authorization. CEL only sees
+ *   mcp.tool.name/target and jwt.* -- never the call's arguments (confirmed
+ *   against the agentgateway-enterprise source: McpAuthorizationSet::validate
+ *   builds MCPInfo from a bare ResourceType). Referencing mcp.tool.arguments
+ *   here fails closed: denies every call and hides the tool from tools/list.
+ * - 'guardrails' -- spec.backend.mcp.guardrails.processors. Runs after
+ *   argument parsing, so mcp.tool.arguments IS populated (dot access only,
+ *   e.g. `mcp.tool.arguments.buyer_id`). Use this for any check needing the
+ *   call's own arguments, e.g. an LLM-supplied buyer_id vs jwt.fixture_id.
  *
  * Configuration:
  * {
@@ -29,8 +40,13 @@ import { CommandRunner } from '../../../src/lib/common.js';
  *                                      // backendDiscoveryNamespace.
  *   backendDiscoveryNamespace: string, // Default: 'agentregistry-system' (ignored when
  *                                      // staticBackendName is set)
- *   action: string,                   // Default: 'Deny' -- Allow|Deny|Require
- *   matchExpressions: string[],       // Required -- CEL expressions
+ *   mode: string,                     // Default: 'authorization' -- 'authorization'|'guardrails'
+ *   action: string,                   // authorization mode only. Default: 'Deny' -- Allow|Deny|Require
+ *   matchExpressions: string[],       // authorization mode only. Required -- CEL expressions
+ *   guardrailMethods: object,         // guardrails mode only. Default: { 'tools/call': 'Request' } --
+ *                                      // map of MCP method pattern -> Phase (Off|Request|Response|Full)
+ *   condition: string,                // guardrails mode only. Required -- CEL expression; true rejects
+ *   reject: string,                   // guardrails mode only. Required -- message returned on rejection
  * }
  */
 export class McpToolPolicyFeature extends Feature {
@@ -42,8 +58,12 @@ export class McpToolPolicyFeature extends Feature {
     this.backendDiscoveryNamespace = this.staticBackendName
       ? this.namespace
       : config.backendDiscoveryNamespace || 'agentregistry-system';
+    this.mode = config.mode || 'authorization';
     this.action = config.action || 'Deny';
     this.matchExpressions = config.matchExpressions || [];
+    this.guardrailMethods = config.guardrailMethods || { 'tools/call': 'Request' };
+    this.condition = config.condition;
+    this.reject = config.reject;
   }
 
   validate() {
@@ -51,8 +71,12 @@ export class McpToolPolicyFeature extends Feature {
     if (!this.namespace) throw new Error('mcp-tool-policy: namespace is required');
     if (!this.mcpServerName && !this.staticBackendName)
       throw new Error('mcp-tool-policy: mcpServerName is required unless staticBackendName is set');
-    if (this.matchExpressions.length === 0)
-      throw new Error('mcp-tool-policy: matchExpressions is required (non-empty)');
+    if (!['authorization', 'guardrails'].includes(this.mode))
+      throw new Error(`mcp-tool-policy: mode must be 'authorization' or 'guardrails', got '${this.mode}'`);
+    if (this.mode === 'authorization' && this.matchExpressions.length === 0)
+      throw new Error('mcp-tool-policy: matchExpressions is required (non-empty) in authorization mode');
+    if (this.mode === 'guardrails' && (!this.condition || !this.reject))
+      throw new Error('mcp-tool-policy: condition and reject are required in guardrails mode');
     return true;
   }
 
@@ -85,6 +109,24 @@ export class McpToolPolicyFeature extends Feature {
   }
 
   buildPolicy(backendName) {
+    const mcp =
+      this.mode === 'guardrails'
+        ? {
+            guardrails: {
+              processors: [
+                {
+                  methods: this.guardrailMethods,
+                  expression: { condition: this.condition, reject: this.reject },
+                },
+              ],
+            },
+          }
+        : {
+            authorization: {
+              action: this.action,
+              policy: { matchExpressions: this.matchExpressions },
+            },
+          };
     return {
       apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
       kind: 'EnterpriseAgentgatewayPolicy',
@@ -104,14 +146,7 @@ export class McpToolPolicyFeature extends Feature {
             name: backendName,
           },
         ],
-        backend: {
-          mcp: {
-            authorization: {
-              action: this.action,
-              policy: { matchExpressions: this.matchExpressions },
-            },
-          },
-        },
+        backend: { mcp },
       },
     };
   }
@@ -122,8 +157,10 @@ export class McpToolPolicyFeature extends Feature {
     for (const context of contextsToDeploy) {
       const backendName = this.staticBackendName || (await this.discoverBackendName(context));
       await this.applyResource(this.buildPolicy(backendName), context);
+      const summary =
+        this.mode === 'guardrails' ? 'guardrails reject-on-match' : `authorization ${this.action}`;
       this.log(
-        `Tool policy '${this.policyName}' applied (${this.action}), targeting Backend '${backendName}'`,
+        `Tool policy '${this.policyName}' applied (${summary}), targeting Backend '${backendName}'`,
         'success'
       );
     }

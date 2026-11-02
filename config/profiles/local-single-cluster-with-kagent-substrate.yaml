@@ -52,12 +52,9 @@ spec:
           hostname: '{{env.domains.core.agentgatewayUi}}'
           oidc:
             issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
-            # Client IDs are the enterprise-agentgateway-ui chart defaults
-            # (enterprise-agentgateway-ui / enterprise-agentgateway-ui-backend) -- the keycloak
-            # clients below must use those exact IDs.
+            # Client IDs below must match the chart's defaults (enterprise-agentgateway-ui{,-backend}).
             backendClientSecret: enterprise-agentgateway-ui-backend-secret
-            # Maps this realm's existing groups to the UI's built-in roles -- the chart's own
-            # default roleMappings (admins/writers/readers) don't match our group names.
+            # Chart defaults (admins/writers/readers) don't match our group names.
             roleMappings:
               kagent-admins: global.Admin
               kagent-writers: global.Writer
@@ -75,6 +72,10 @@ spec:
           clusterIssuerName: letsencrypt-dns
         realms:
           - realm: kagent
+            # fixture_id claim carries each user's real fixtures.Buyer/Seller ID (e.g.
+            # "buyer-1"), used by agora-mcp-bid-identity's CEL check in agora-demo-local.yaml.
+            customAttributes:
+              - fixture_id
             groups:
               - kagent-admins
               - kagent-writers
@@ -139,8 +140,7 @@ spec:
                 # requested client".
                 clientAttributes:
                   standard.token.exchange.enabled: 'true'
-              # Browser-facing agentgateway UI login. Client ID matches the
-              # enterprise-agentgateway-ui chart's ui.oidc.clientId default.
+              # Browser-facing agentgateway UI login; ID matches the chart's ui.oidc.clientId default.
               - clientId: enterprise-agentgateway-ui
                 type: public
                 flows:
@@ -148,13 +148,11 @@ spec:
                 clientAttributes:
                   pkce.code.challenge.method: S256
                 groupMembership: true
-                # The UI backend validates access tokens against its own client ID by default --
-                # Keycloak doesn't include a client's own ID in `aud` without an explicit mapper.
+                # Keycloak doesn't put a client's own ID in `aud` without this explicit mapper.
                 audience: enterprise-agentgateway-ui
                 redirectUris:
                   - '{{env.agentgateway.scheme}}://{{env.domains.core.agentgatewayUi}}/*'
-              # agentgateway-ui's backend-side OIDC client (token validation), not a login flow.
-              # Client ID matches the chart's backend.oidc.clientId default.
+              # Backend-side OIDC client (token validation); ID matches backend.oidc.clientId default.
               - clientId: enterprise-agentgateway-ui-backend
                 type: confidential
                 clientSecret: enterprise-agentgateway-ui-backend-secret
@@ -185,12 +183,25 @@ spec:
                 lastName: Buyer
                 memberOf:
                   - buyers
+                attributes:
+                  fixture_id: buyer-1
+              # Second buyer identity, for live-auction demos with two real competing bidders.
+              - username: demo-buyer2
+                email: demo-buyer2@example.com
+                firstName: Demo
+                lastName: Buyer2
+                memberOf:
+                  - buyers
+                attributes:
+                  fixture_id: buyer-2
               - username: demo-seller
                 email: demo-seller@example.com
                 firstName: Demo
                 lastName: Seller
                 memberOf:
                   - sellers
+                attributes:
+                  fixture_id: seller-1
               - username: demo-operator
                 email: demo-operator@example.com
                 firstName: Demo

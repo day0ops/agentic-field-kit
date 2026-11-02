@@ -963,6 +963,7 @@ export class KeycloakFeature extends AddonFeature {
     // unrelated users.
     const userPasswordOverrides = {
       'demo-buyer': this.agoraCustomerPassword,
+      'demo-buyer2': this.agoraCustomerPassword,
       'demo-seller': this.agoraCustomerPassword,
       'demo-operator': this.agoraCustomerPassword,
     };

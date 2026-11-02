@@ -10,15 +10,11 @@ spec:
 
   features:
     # Every MCP server below is fronted by agentgateway (mcp-gateway-route) and
-    # auth-enforced (token-exchange-policy, further down) - validated live
-    # 2026-11-02 against catalog-mcp alone first (read-only, lowest risk) before
-    # extending to the other 4. tokenPassthrough forwards the end user's own
-    # token instead of calling anonymously; gatewayUrl points RemoteMCPServer at
-    # the gateway-fronted route instead of the bare ClusterIP Service, which
-    # enforces nothing on its own (confirmed live: still directly, anonymously
-    # reachable even after this - the gateway secures the intended path, not the
-    # backend Service itself; closing that fully needs a NetworkPolicy, not yet
-    # added).
+    # auth-enforced (token-exchange-policy, further down). tokenPassthrough forwards
+    # the end user's own token instead of calling anonymously; gatewayUrl points
+    # RemoteMCPServer at the gateway-fronted route instead of the bare ClusterIP
+    # Service (still directly reachable anonymously -- closing that needs a
+    # NetworkPolicy, not yet added).
     - name: mcp-gateway-route
       description: Front Bids MCP with agentgateway so token-exchange-policy can enforce auth on it
       config:
@@ -285,10 +281,9 @@ spec:
         policyName: agora-chat-auth
         namespace: kagent-system
         # Must NOT be agora-console: that route has no bearer token on a browser's first
-        # request and relies entirely on oidc-gateway's own separate session-based redirect
-        # login -- targeting it here applies Strict JWT enforcement ahead of that redirect
-        # and rejects every visit with "no bearer token found" before login can happen.
-        # Only the two agent A2A routes carry a real forwarded bearer token.
+        # request (oidc-gateway's own session-based redirect login handles it instead) --
+        # targeting it here rejects every visit with "no bearer token found" before login
+        # can happen. Only the two agent A2A routes carry a real forwarded bearer token.
         targetHTTPRoute: shopping-assistant-a2a
         # Both agents route through the same shared kagent-controller-a2a Backend
         # (substrate-a2a-route's naming convention) -- one exchange policy entry covers
@@ -308,12 +303,10 @@ spec:
         clientSecret: agora-console-ui-secret
 
     # Separate policy instance from the A2A one above, covering all 5 MCP servers'
-    # gateway-fronted routes - validated live 2026-11-02 against catalog-mcp alone
-    # first before extending here. Every call to any of these routes is
-    # kagent-controller forwarding the end user's own token (tokenPassthrough: true
-    # on each server's kagent-mcp-server step) - never a raw browser request - so
-    # Strict JWT enforcement has nothing unauthenticated to break, unlike
-    # agora-console's own route.
+    # gateway-fronted routes. Every call to these routes is kagent-controller
+    # forwarding the end user's own token (tokenPassthrough: true on each server's
+    # kagent-mcp-server step), never a raw browser request, so Strict JWT
+    # enforcement has nothing unauthenticated to break, unlike agora-console's route.
     - name: token-exchange-policy
       description: Validate and exchange the buyer/seller's Keycloak token before it reaches any MCP server
       config:
@@ -340,6 +333,21 @@ spec:
         exchangePath: /realms/kagent/protocol/openid-connect/token
         clientId: agora-console-ui
         clientSecret: agora-console-ui-secret
+
+    # The shopping-assistant doesn't cross-check that the buyer_id it passes to
+    # place_bid/set_autobid_max matches the authenticated caller -- enforced here
+    # instead via jwt.fixture_id (a Keycloak custom-attribute claim, see
+    # customAttributes in the keycloak addon config). mode: guardrails, not
+    # authorization -- see McpToolPolicyFeature's doc comment for why.
+    - name: mcp-tool-policy
+      description: Require a place_bid/set_autobid_max call's buyer_id argument to match the authenticated caller's own fixture ID
+      config:
+        policyName: agora-mcp-bid-identity
+        namespace: kagent-system
+        staticBackendName: bids-mcp-mcp-backend
+        mode: guardrails
+        condition: "mcp.tool.name in ['place_bid', 'set_autobid_max'] && mcp.tool.arguments.buyer_id != jwt.fixture_id"
+        reject: "buyer_id must match the authenticated caller's own identity"
 
     # As soon as any EnterpriseKagentRBACPolicy exists on the cluster (the kagent addon's
     # own admins/writers/readers policies already do), every group without a matching
