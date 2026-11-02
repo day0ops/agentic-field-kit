@@ -880,6 +880,34 @@ export class InstallerManager {
   }
 
   /**
+   * cert-manager, external-dns, and aws-load-balancer-controller are installed early in most
+   * profiles since other addons depend on them (ClusterIssuers, DNS records, LoadBalancer
+   * Services), but cleanup otherwise walks addons in reverse install order. A profile that
+   * doesn't follow that convention (e.g. a mesh-focused cluster block that adds cert-manager
+   * last) would reverse-clean it first, before the addons that actually need it. Defer all
+   * three to the end explicitly, in this order, with cilium kept absolute last since pods --
+   * including these addons' own -- need CNI connectivity to terminate cleanly:
+   * - cert-manager and external-dns should still be running while other addons' Certificates/
+   *   DNS-bound Services are torn down, so those get cleaned up rather than orphaned.
+   * - aws-load-balancer-controller clears the service.k8s.aws/resources finalizer on
+   *   LoadBalancer Services -- removing it before those Services are deleted leaves them
+   *   stuck forever.
+   */
+  static orderForCleanup(addons) {
+    const name = a => (typeof a === 'string' ? a : a.name);
+    const DEFERRED_ORDER = [
+      'cert-manager',
+      'external-dns',
+      'aws-load-balancer-controller',
+      'cilium',
+    ];
+    const reversed = [...addons].reverse();
+    const rest = reversed.filter(a => !DEFERRED_ORDER.includes(name(a)));
+    const deferred = DEFERRED_ORDER.flatMap(n => addons.filter(a => name(a) === n));
+    return [...rest, ...deferred];
+  }
+
+  /**
    * Uninstall mesh from a single cluster.
    * Detects install method from the profile when provided; defaults to helm.
    */
@@ -979,13 +1007,7 @@ export class InstallerManager {
             /* best effort — proceed without template resolution if env unavailable */
           }
 
-          // Reverse install order; always remove cilium last (CNI must stay up longest)
-          const reversedAddons = [...resolved.addons].reverse();
-          const ciliumIdx = reversedAddons.findIndex(
-            a => (typeof a === 'string' ? a : a.name) === 'cilium'
-          );
-          if (ciliumIdx > -1) reversedAddons.push(reversedAddons.splice(ciliumIdx, 1)[0]);
-          for (const addon of reversedAddons) {
+          for (const addon of InstallerManager.orderForCleanup(resolved.addons)) {
             const addonName = typeof addon === 'string' ? addon : addon.name;
             let addonConfig = typeof addon === 'string' ? {} : { ...addon };
             // Flatten nested 'config:' key — mirrors install path in #installAddons
