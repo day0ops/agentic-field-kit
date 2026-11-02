@@ -918,7 +918,7 @@ export class InstallerManager {
     const spinner = new SpinnerLogger();
 
     const installMethod = profile ? ProfileSchema.getInstallMethod(profile) : 'helm';
-    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : true;
+    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : false;
 
     spinner.start(
       `${hasMesh ? 'Uninstalling Istio Ambient' : 'Uninstalling addons'} from ${cluster?.name || contextDisplay}...`
@@ -1065,7 +1065,7 @@ export class InstallerManager {
     Logger.info('All clusters verified accessible');
 
     const profile = profileName ? await ProfileManager.load(profileName) : null;
-    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : true;
+    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : false;
     const uninstallStartTime = Date.now();
 
     Logger.info(
