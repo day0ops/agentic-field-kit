@@ -798,8 +798,8 @@ export class InstallerManager {
   }
 
   /**
-   * Delete orphaned Istio/Solo CRDs left behind after helm uninstall.
-   * Matches any CRD whose name ends with .istio.io or .solo.io.
+   * Delete orphaned Istio CRDs left behind after helm uninstall.
+   * Matches any CRD whose name ends with .istio.io.
    */
   static async cleanupIstioCRDs(context = null, spinner = null) {
     const flags = contextFlags(context);
@@ -810,11 +810,11 @@ export class InstallerManager {
     const crds = (result.stdout || '')
       .split('\n')
       .map(s => s.trim())
-      .filter(s => s.endsWith('.istio.io') || s.endsWith('.solo.io'));
+      .filter(s => s.endsWith('.istio.io'));
 
     if (crds.length === 0) return;
 
-    const msg = `Removing ${crds.length} orphaned Istio/Solo CRD(s)...`;
+    const msg = `Removing ${crds.length} orphaned Istio CRD(s)...`;
     if (spinner) spinner.log(msg);
     else Logger.info(msg);
     await CommandRunner.exec(
@@ -823,22 +823,28 @@ export class InstallerManager {
   }
 
   /**
-   * Delete CRDs installed by profile addons (cert-manager, cilium, Gateway API,
-   * external-dns, kube-prometheus-stack, Grafana alloy, agentgateway, agentregistry).
-   * Called only when --addons flag is set. Skips AWS-native CRD domains.
+   * Delete CRDs installed by profile addons. Called only when --addons flag is set.
+   * addonNames scopes deletion to addons actually configured in the profile being
+   * cleaned, so e.g. a cluster-provided Cilium untouched by this profile is never
+   * swept just because this field-kit also knows how to install Cilium elsewhere.
    */
-  static async cleanupAddonCRDs(context = null, spinner = null) {
-    const ADDON_CRD_SUFFIXES = [
-      '.cert-manager.io',
-      '.acme.cert-manager.io',
-      '.cilium.io',
-      '.gateway.networking.k8s.io',
-      '.externaldns.k8s.io',
-      '.monitoring.coreos.com',
-      '.monitoring.grafana.com',
-      '.agentgateway.dev',
-      '.ar.dev',
-    ];
+  static async cleanupAddonCRDs(context = null, spinner = null, addonNames = []) {
+    const ADDON_CRD_SUFFIXES = {
+      'cert-manager': ['.cert-manager.io', '.acme.cert-manager.io'],
+      cilium: ['.cilium.io'],
+      'external-dns': ['.externaldns.k8s.io'],
+      telemetry: ['.monitoring.coreos.com', '.monitoring.grafana.com'],
+      agentgateway: [
+        '.agentgateway.dev',
+        '.gateway.networking.k8s.io',
+        '.enterpriseagentgateway.solo.io',
+        '.ratelimit.solo.io',
+      ],
+      agentregistry: ['.ar.dev'],
+      kagent: ['.kagent-enterprise.solo.io', '.ate.solo.io'],
+    };
+    const suffixes = addonNames.flatMap(name => ADDON_CRD_SUFFIXES[name] || []);
+    if (suffixes.length === 0) return;
 
     const flags = contextFlags(context);
     const result = await CommandRunner.exec(
@@ -848,7 +854,7 @@ export class InstallerManager {
     const crds = (result.stdout || '')
       .split('\n')
       .map(s => s.trim())
-      .filter(s => ADDON_CRD_SUFFIXES.some(suffix => s.endsWith(suffix)));
+      .filter(s => suffixes.some(suffix => s.endsWith(suffix)));
 
     if (crds.length > 0) {
       const msg = `Removing ${crds.length} orphaned addon CRD(s)...`;
@@ -861,20 +867,22 @@ export class InstallerManager {
 
     // Gateway API standard-install.yaml also installs cluster-scoped non-CRD resources
     // (ValidatingAdmissionPolicy/Binding named *.gateway.networking.k8s.io)
-    for (const kind of ['validatingadmissionpolicy', 'validatingadmissionpolicybinding']) {
-      const listResult = await CommandRunner.exec(
-        `kubectl ${flags.kubectl} get ${kind} --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null`,
-        { ignoreError: true }
-      );
-      const gwResources = (listResult.stdout || '')
-        .split('\n')
-        .map(s => s.trim())
-        .filter(s => s.endsWith('.gateway.networking.k8s.io'));
-      if (gwResources.length > 0) {
-        await CommandRunner.exec(
-          `kubectl ${flags.kubectl} delete ${kind} ${gwResources.join(' ')} --ignore-not-found=true`,
+    if (addonNames.includes('agentgateway')) {
+      for (const kind of ['validatingadmissionpolicy', 'validatingadmissionpolicybinding']) {
+        const listResult = await CommandRunner.exec(
+          `kubectl ${flags.kubectl} get ${kind} --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null`,
           { ignoreError: true }
         );
+        const gwResources = (listResult.stdout || '')
+          .split('\n')
+          .map(s => s.trim())
+          .filter(s => s.endsWith('.gateway.networking.k8s.io'));
+        if (gwResources.length > 0) {
+          await CommandRunner.exec(
+            `kubectl ${flags.kubectl} delete ${kind} ${gwResources.join(' ')} --ignore-not-found=true`,
+            { ignoreError: true }
+          );
+        }
       }
     }
   }
@@ -890,7 +898,7 @@ export class InstallerManager {
     const spinner = new SpinnerLogger();
 
     const installMethod = profile ? ProfileSchema.getInstallMethod(profile) : 'helm';
-    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : true;
+    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : false;
 
     spinner.start(
       `${hasMesh ? 'Uninstalling Istio Ambient' : 'Uninstalling addons'} from ${cluster?.name || contextDisplay}...`
@@ -1006,7 +1014,10 @@ export class InstallerManager {
           }
         }
         // CRD cleanup runs after addon cleanup so addons can still use their CRD types
-        await InstallerManager.cleanupAddonCRDs(context, spinner);
+        const configuredAddonNames = (resolved.addons || []).map(a =>
+          typeof a === 'string' ? a : a.name
+        );
+        await InstallerManager.cleanupAddonCRDs(context, spinner, configuredAddonNames);
       }
 
       const uninstalledWhat = uninstallAddons
@@ -1043,7 +1054,7 @@ export class InstallerManager {
     Logger.info('All clusters verified accessible');
 
     const profile = profileName ? await ProfileManager.load(profileName) : null;
-    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : true;
+    const hasMesh = profile ? ProfileSchema.hasMesh(profile) : false;
     const uninstallStartTime = Date.now();
 
     Logger.info(

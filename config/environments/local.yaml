@@ -5,17 +5,15 @@ metadata:
   description: Bring-your-own Kubernetes cluster (bare-metal/Talos/kind), installed via `base install --context <name>`
 
 spec:
-  # No infraProfile - purely local/bring-your-own cluster. DNS is real (Cloudflare), the
-  # cluster itself is not.
+  acme:
+    email: kasun.talwatta@solo.io
+
   dns:
     provider: cloudflare
     childZone: agentic.lab
     parentZone:
       domain: day0ops.com
     txtOwnerId: agentic-demo-local
-
-  acme:
-    email: kasun.talwatta@solo.io
 
   tls:
     issuer: letsencrypt-dns
@@ -25,7 +23,9 @@ spec:
     domain: dev-12345.okta.com
 
   keycloak:
+    image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.4
     scheme: https
+    loginTheme: keycloak-soloio-login-theme
 
   agentgateway:
     scheme: https
@@ -59,17 +59,17 @@ spec:
         version: 0.165.0
 
   images:
-    # Must track kagent.version's release line -- a stale digest fails ActorTemplate's
+    # Must track kagent.version's release line - a stale digest fails ActorTemplate's
     # /config materialization at rc1.
     kagentHarness: ghcr.io/kagent-dev/kagent/golang-adk@sha256:5b06741be8cb69c9293477bdbf3203c6526127c533fa940fd9f595a82a801701
     agoraDemo:
-      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-api:v0.5.0
-      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-console:v0.5.1
-      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-bids-mcp:v0.1.0
-      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-orders-mcp:v0.1.0
-      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-pricing-mcp:v0.1.0
-      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-trust-mcp:v0.1.0
-      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-mcp:v0.5.0
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-api:v0.6.4
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-console:v0.6.4
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-bids-mcp:v0.6.4
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-orders-mcp:v0.6.4
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-pricing-mcp:v0.6.4
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-trust-mcp:v0.6.4
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-mcp:v0.6.4
 
   # Real DNS under agentic.lab.day0ops.com (Cloudflare), managed by external-dns
   domains:
