@@ -47,7 +47,9 @@ describe('kagent-mcp-server (default: Deployment + Service)', () => {
       namespace: 'agora-demo',
       image: 'example.com/bids-mcp:v1',
       port: 9101,
-      env: [{ name: 'CATALOG_API_URL', value: 'http://catalog-api.agora-demo.svc.cluster.local:18080' }],
+      env: [
+        { name: 'CATALOG_API_URL', value: 'http://catalog-api.agora-demo.svc.cluster.local:18080' },
+      ],
     });
     const d = withEnv.buildDeployment();
     expect(d.spec.template.spec.containers[0].env).toEqual([
@@ -81,8 +83,6 @@ describe('kagent-mcp-server (legacyNativeMcpServer: true)', () => {
     const r = f.buildRemoteMcpServer();
     expect(r.apiVersion).toBe('kagent.dev/v1alpha3');
     expect(r.kind).toBe('RemoteMCPServer');
-    expect(r.spec.url).toBe(
-      'http://returns-eligibility.kagent-system.svc.cluster.local:8080/mcp'
-    );
+    expect(r.spec.url).toBe('http://returns-eligibility.kagent-system.svc.cluster.local:8080/mcp');
   });
 });

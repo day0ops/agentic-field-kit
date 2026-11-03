@@ -56,9 +56,9 @@ spec:
   selector:
     app: postgres
   ports:
-  - name: postgres
-    port: 5432
-    targetPort: 5432
+    - name: postgres
+      port: 5432
+      targetPort: 5432
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -80,131 +80,131 @@ spec:
         fsGroup: 70
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
-      - name: tls-reloader
-        restartPolicy: Always
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        securityContext:
-          runAsUser: 70
-        env:
-        - name: POSTGRES_USER
-          value: postgres
-        command:
-        - /bin/sh
-        - /etc/postgresql/reload-tls.sh
-        volumeMounts:
-        - name: config
-          mountPath: /etc/postgresql
-        - name: servicedns
-          mountPath: /run/servicedns.podcert.ate.dev
-          readOnly: true
-        - name: postgres-ca
-          mountPath: /run/postgres.podcert.ate.dev
-          readOnly: true
-        - name: socket
-          mountPath: /var/run/postgresql
-        resources:
-          requests:
-            cpu: 10m
-            memory: 32Mi
+        - name: tls-reloader
+          restartPolicy: Always
+          image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          securityContext:
+            runAsUser: 70
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+          command:
+            - /bin/sh
+            - /etc/postgresql/reload-tls.sh
+          volumeMounts:
+            - name: config
+              mountPath: /etc/postgresql
+            - name: servicedns
+              mountPath: /run/servicedns.podcert.ate.dev
+              readOnly: true
+            - name: postgres-ca
+              mountPath: /run/postgres.podcert.ate.dev
+              readOnly: true
+            - name: socket
+              mountPath: /var/run/postgresql
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
       containers:
-      - name: postgres
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        lifecycle:
-          postStart:
+        - name: postgres
+          image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -ec
+                  - |
+                    until psql -U "${POSTGRES_USER}" -d postgres -Atc 'SELECT 1' >/dev/null 2>&1; do
+                      sleep 1
+                    done
+                    if ! psql -U "${POSTGRES_USER}" -d postgres -Atc \
+                      "SELECT 1 FROM pg_database WHERE datname = 'atepg'" | grep -qx 1; then
+                      createdb -U "${POSTGRES_USER}" atepg
+                    fi
+          env:
+            - name: POSTGRES_DB
+              value: atepg
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: trust
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
             exec:
               command:
-              - /bin/sh
-              - -ec
-              - |
-                until psql -U "${POSTGRES_USER}" -d postgres -Atc 'SELECT 1' >/dev/null 2>&1; do
-                  sleep 1
-                done
-                if ! psql -U "${POSTGRES_USER}" -d postgres -Atc \
-                  "SELECT 1 FROM pg_database WHERE datname = 'atepg'" | grep -qx 1; then
-                  createdb -U "${POSTGRES_USER}" atepg
-                fi
-        env:
-        - name: POSTGRES_DB
-          value: atepg
-        - name: POSTGRES_USER
-          value: postgres
-        - name: POSTGRES_HOST_AUTH_METHOD
-          value: trust
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
-        ports:
-        - name: postgres
-          containerPort: 5432
-        readinessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -ec
-            - nc -z 127.0.0.1 5432
-          initialDelaySeconds: 2
-          periodSeconds: 2
-        livenessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -ec
-            - pg_isready -U "${POSTGRES_USER}" -d postgres
-          initialDelaySeconds: 10
-          periodSeconds: 10
-        args:
-        - -c
-        - config_file=/etc/postgresql/postgresql.conf
-        volumeMounts:
+                - /bin/sh
+                - -ec
+                - nc -z 127.0.0.1 5432
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - pg_isready -U "${POSTGRES_USER}" -d postgres
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          args:
+            - -c
+            - config_file=/etc/postgresql/postgresql.conf
+          volumeMounts:
+            - name: config
+              mountPath: /etc/postgresql
+            - name: servicedns
+              mountPath: /run/servicedns.podcert.ate.dev
+              readOnly: true
+            - name: postgres-ca
+              mountPath: /run/postgres.podcert.ate.dev
+              readOnly: true
+            - name: socket
+              mountPath: /var/run/postgresql
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # Right-sized for a single-node local/demo cluster (solo-io/substrate's own "kind"
+          # overlay sizing), not the multi-core production footprint the base manifest assumes.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+      volumes:
         - name: config
-          mountPath: /etc/postgresql
+          configMap:
+            name: postgres-config
         - name: servicedns
-          mountPath: /run/servicedns.podcert.ate.dev
-          readOnly: true
-        - name: postgres-ca
-          mountPath: /run/postgres.podcert.ate.dev
-          readOnly: true
+          projected:
+            defaultMode: 0600
+            sources:
+              - podCertificate:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
         - name: socket
-          mountPath: /var/run/postgresql
-        - name: data
-          mountPath: /var/lib/postgresql/data
-        # Right-sized for a single-node local/demo cluster (solo-io/substrate's own "kind"
-        # overlay sizing), not the multi-core production footprint the base manifest assumes.
+          emptyDir: {}
+        - name: postgres-ca
+          projected:
+            sources:
+              - clusterTrustBundle:
+                  signerName: postgres.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ['ReadWriteOnce']
         resources:
           requests:
-            cpu: 250m
-            memory: 1Gi
-          limits:
-            cpu: "2"
-            memory: 2Gi
-      volumes:
-      - name: config
-        configMap:
-          name: postgres-config
-      - name: servicedns
-        projected:
-          defaultMode: 0600
-          sources:
-          - podCertificate:
-              signerName: servicedns.podcert.ate.dev/identity
-              keyType: ECDSAP256
-              credentialBundlePath: credential-bundle.pem
-      - name: socket
-        emptyDir: {}
-      - name: postgres-ca
-        projected:
-          sources:
-          - clusterTrustBundle:
-              signerName: postgres.podcert.ate.dev/identity
-              labelSelector:
-                matchLabels:
-                  podcert.ate.dev/canarying: live
-              path: trust-bundle.pem
-  volumeClaimTemplates:
-  - metadata:
-      name: data
-    spec:
-      accessModes: [ "ReadWriteOnce" ]
-      resources:
-        requests:
-          # Right-sized for a local/demo cluster, not the 500Gi the base manifest assumes.
-          storage: 1Gi
+            # Right-sized for a local/demo cluster, not the 500Gi the base manifest assumes.
+            storage: 1Gi

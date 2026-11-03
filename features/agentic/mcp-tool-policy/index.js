@@ -72,9 +72,13 @@ export class McpToolPolicyFeature extends Feature {
     if (!this.mcpServerName && !this.staticBackendName)
       throw new Error('mcp-tool-policy: mcpServerName is required unless staticBackendName is set');
     if (!['authorization', 'guardrails'].includes(this.mode))
-      throw new Error(`mcp-tool-policy: mode must be 'authorization' or 'guardrails', got '${this.mode}'`);
+      throw new Error(
+        `mcp-tool-policy: mode must be 'authorization' or 'guardrails', got '${this.mode}'`
+      );
     if (this.mode === 'authorization' && this.matchExpressions.length === 0)
-      throw new Error('mcp-tool-policy: matchExpressions is required (non-empty) in authorization mode');
+      throw new Error(
+        'mcp-tool-policy: matchExpressions is required (non-empty) in authorization mode'
+      );
     if (this.mode === 'guardrails' && (!this.condition || !this.reject))
       throw new Error('mcp-tool-policy: condition and reject are required in guardrails mode');
     return true;

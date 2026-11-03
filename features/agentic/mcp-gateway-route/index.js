@@ -75,8 +75,7 @@ export class McpGatewayRouteFeature extends Feature {
     if (!this.namespace) throw new Error('mcp-gateway-route: namespace is required');
     if (!this.port) throw new Error('mcp-gateway-route: port is required');
     if (!this.gatewayName) throw new Error('mcp-gateway-route: gatewayName is required');
-    if (!this.gatewayNamespace)
-      throw new Error('mcp-gateway-route: gatewayNamespace is required');
+    if (!this.gatewayNamespace) throw new Error('mcp-gateway-route: gatewayNamespace is required');
     if (!this.hostname) throw new Error('mcp-gateway-route: hostname is required');
     return true;
   }

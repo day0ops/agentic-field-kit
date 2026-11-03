@@ -206,13 +206,20 @@ export class KagentMcpServerFeature extends Feature {
       // running both -- kubectl could resolve to the wrong one and silently no-op
       // (caught by --ignore-not-found), orphaning the kagent-native resource.
       await this.deleteResource(
-        this.legacyNativeMcpServer ? 'remotemcpservers.kagent.dev' : 'remotemcpservers.api.kagent.dev',
+        this.legacyNativeMcpServer
+          ? 'remotemcpservers.kagent.dev'
+          : 'remotemcpservers.api.kagent.dev',
         this.serverName,
         this.namespace,
         context
       );
       if (this.legacyNativeMcpServer) {
-        await this.deleteResource('mcpservers.kagent.dev', this.serverName, this.namespace, context);
+        await this.deleteResource(
+          'mcpservers.kagent.dev',
+          this.serverName,
+          this.namespace,
+          context
+        );
       } else {
         await this.deleteResource('service', this.serverName, this.namespace, context);
         await this.deleteResource('deployment', this.serverName, this.namespace, context);

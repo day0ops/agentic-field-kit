@@ -711,7 +711,12 @@ export class AgentgatewayFeature extends AddonFeature {
         this.namespace,
         this.kubeContext
       );
-      await this.deleteResource('certificate', this.ui.tlsSecretName, this.namespace, this.kubeContext);
+      await this.deleteResource(
+        'certificate',
+        this.ui.tlsSecretName,
+        this.namespace,
+        this.kubeContext
+      );
       await this.deleteResource('secret', this.ui.tlsSecretName, this.namespace, this.kubeContext);
     }
 

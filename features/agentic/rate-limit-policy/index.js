@@ -62,9 +62,11 @@ export class RateLimitPolicyFeature extends Feature {
 
   validate() {
     if (!this.policyName) throw new Error('rate-limit-policy: policyName is required');
-    if (!this.rateLimitConfigName) throw new Error('rate-limit-policy: rateLimitConfigName is required');
+    if (!this.rateLimitConfigName)
+      throw new Error('rate-limit-policy: rateLimitConfigName is required');
     if (!this.targetHttpRoute) throw new Error('rate-limit-policy: targetHttpRoute is required');
-    if (this.limits.length === 0) throw new Error('rate-limit-policy: limits is required (non-empty)');
+    if (this.limits.length === 0)
+      throw new Error('rate-limit-policy: limits is required (non-empty)');
     return true;
   }
 
@@ -134,9 +136,22 @@ export class RateLimitPolicyFeature extends Feature {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
-      await this.deleteResource('enterpriseagentgatewaypolicy', this.policyName, this.namespace, context);
-      await this.deleteResource('ratelimitconfig', this.rateLimitConfigName, this.namespace, context);
+      await this.deleteResource(
+        'enterpriseagentgatewaypolicy',
+        this.policyName,
+        this.namespace,
+        context
+      );
+      await this.deleteResource(
+        'ratelimitconfig',
+        this.rateLimitConfigName,
+        this.namespace,
+        context
+      );
     }
-    this.log(`RateLimitConfig '${this.rateLimitConfigName}' and its traffic policy removed`, 'success');
+    this.log(
+      `RateLimitConfig '${this.rateLimitConfigName}' and its traffic policy removed`,
+      'success'
+    );
   }
 }

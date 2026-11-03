@@ -167,7 +167,10 @@ export class KeycloakFeature extends AddonFeature {
     // must come from its own env var regardless of which realm config declares them in.
     this.hasAgoraCustomerUsers = (config.realms || []).some(r =>
       (r.users || []).some(
-        u => u.username === 'demo-buyer' || u.username === 'demo-seller' || u.username === 'demo-operator'
+        u =>
+          u.username === 'demo-buyer' ||
+          u.username === 'demo-seller' ||
+          u.username === 'demo-operator'
       )
     );
     const clusterAddons = config.clusterAddons || [];

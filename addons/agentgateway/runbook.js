@@ -174,7 +174,9 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
         // Mirrors the kagent addon's own clickhouse override (chart default is 2 CPUs).
         `  --set ui.clickhouse.resources.requests.cpu=300m`,
         ...(ui.oidc.roleMappings
-          ? [`  --set-json 'ui.rbac.roleMapping.roleMappings=${JSON.stringify(ui.oidc.roleMappings)}'`]
+          ? [
+              `  --set-json 'ui.rbac.roleMapping.roleMappings=${JSON.stringify(ui.oidc.roleMappings)}'`,
+            ]
           : []),
       ]
     : [];

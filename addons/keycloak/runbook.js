@@ -71,7 +71,10 @@ export function envVarsFor(addonCfg, _clusterName) {
   if (
     (addonCfg?.config?.realms || []).some(r =>
       (r.users || []).some(
-        u => u.username === 'demo-buyer' || u.username === 'demo-seller' || u.username === 'demo-operator'
+        u =>
+          u.username === 'demo-buyer' ||
+          u.username === 'demo-seller' ||
+          u.username === 'demo-operator'
       )
     )
   ) {

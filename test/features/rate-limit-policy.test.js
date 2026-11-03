@@ -8,7 +8,12 @@ describe('rate-limit-policy', () => {
     namespace: 'agentgateway-proxy',
     targetHttpRoute: 'bids-mcp',
     limits: [
-      { name: 'per-buyer-bid-rate', subject: { buyerId: 'buyer-1' }, requestsPerUnit: 10, unit: 'Minute' },
+      {
+        name: 'per-buyer-bid-rate',
+        subject: { buyerId: 'buyer-1' },
+        requestsPerUnit: 10,
+        unit: 'Minute',
+      },
     ],
   });
 
@@ -19,7 +24,12 @@ describe('rate-limit-policy', () => {
     expect(rlc.metadata.name).toBe('bid-spam-limits');
     expect(rlc.metadata.namespace).toBe('agentgateway-proxy');
     expect(rlc.spec.limits).toEqual([
-      { name: 'per-buyer-bid-rate', subject: { buyerId: 'buyer-1' }, requestsPerUnit: 10, unit: 'Minute' },
+      {
+        name: 'per-buyer-bid-rate',
+        subject: { buyerId: 'buyer-1' },
+        requestsPerUnit: 10,
+        unit: 'Minute',
+      },
     ]);
   });
 
@@ -40,23 +50,31 @@ describe('rate-limit-policy', () => {
 
   it('honors an explicit discoveryFrom override', () => {
     const custom = new RateLimitPolicyFeature('rate-limit-policy', {
-      policyName: 'p', rateLimitConfigName: 'c', targetHttpRoute: 'r',
+      policyName: 'p',
+      rateLimitConfigName: 'c',
+      targetHttpRoute: 'r',
       limits: [{ name: 'x', subject: {}, requestsPerUnit: 1, unit: 'Second' }],
       discoveryFrom: 'All',
     });
-    expect(custom.buildTrafficPolicy().spec.traffic.entRateLimit.discovery.namespaces.from).toBe('All');
+    expect(custom.buildTrafficPolicy().spec.traffic.entRateLimit.discovery.namespaces.from).toBe(
+      'All'
+    );
   });
 
   it('validate throws when limits is empty', () => {
     const bad = new RateLimitPolicyFeature('rate-limit-policy', {
-      policyName: 'p', rateLimitConfigName: 'c', targetHttpRoute: 'r', limits: [],
+      policyName: 'p',
+      rateLimitConfigName: 'c',
+      targetHttpRoute: 'r',
+      limits: [],
     });
     expect(() => bad.validate()).toThrow('limits');
   });
 
   it('validate throws when policyName is missing', () => {
     const bad = new RateLimitPolicyFeature('rate-limit-policy', {
-      rateLimitConfigName: 'c', targetHttpRoute: 'r',
+      rateLimitConfigName: 'c',
+      targetHttpRoute: 'r',
       limits: [{ name: 'x', subject: {}, requestsPerUnit: 1, unit: 'Second' }],
     });
     expect(() => bad.validate()).toThrow('policyName');

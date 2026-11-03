@@ -97,7 +97,11 @@ describe('kagent-rbac-policy', () => {
     });
     expect(oversight.validate()).toBe(true);
     expect(oversight.buildPolicy().spec.grants).toEqual([
-      { name: 'view-sessions-all-creators', resource: 'kagent:sessions-all-creators', accessLevel: 'view' },
+      {
+        name: 'view-sessions-all-creators',
+        resource: 'kagent:sessions-all-creators',
+        accessLevel: 'view',
+      },
     ]);
   });
 
