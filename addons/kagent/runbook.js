@@ -1002,6 +1002,9 @@ export function cleanup(addonCfg, clusterName) {
     ? `# Substrate uninstalls after kagent (controller + CRDs), matching upstream's own teardown\n` +
       `# order. GCS bucket contents (if that backend was used) are not deleted here -- cross-session\n` +
       `# data, left for manual cleanup.\n` +
+      `# Delete chart-bundled SandboxConfigs first -- only ate-controller clears their finalizer,\n` +
+      `# and the chart uninstall below gives no ordering guarantee between it and the CR.\n` +
+      `kubectl delete sandboxconfigs.ate.dev gvisor-default --context ${ctx} --ignore-not-found --timeout=60s\n` +
       `helm uninstall substrate -n ${substrateNs} --kube-context ${ctx}\n` +
       `helm uninstall substrate-crds -n ${substrateNs} --kube-context ${ctx}\n` +
       `helm uninstall substrate-podcert -n ${PODCERT_NAMESPACE} --kube-context ${ctx}\n` +

@@ -1980,6 +1980,18 @@ ${inClusterAuthLines}`;
     // teardown order. GCS bucket contents (if that backend was used) are deliberately
     // not deleted here -- cross-session data, left for manual cleanup.
     if (this.enterprise && this.substrate.enabled) {
+      // Delete chart-bundled SandboxConfig instances while ate-controller is still up --
+      // it's the only thing that clears their workerpool-protection finalizer, and the
+      // chart uninstall below gives no ordering guarantee between the controller and the CR.
+      await KubernetesHelper.kubectl([
+        ...kubectlCtxArgs,
+        'delete',
+        'sandboxconfigs.ate.dev',
+        'gvisor-default',
+        '--ignore-not-found=true',
+        '--timeout=60s',
+      ]).catch((err) => this.log(`Could not clean up gvisor-default SandboxConfig: ${err.message}`, 'warn'));
+
       for (const release of [SUBSTRATE_RELEASE, SUBSTRATE_CRDS_RELEASE]) {
         try {
           await KubernetesHelper.helm(
