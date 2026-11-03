@@ -1990,7 +1990,9 @@ ${inClusterAuthLines}`;
         'gvisor-default',
         '--ignore-not-found=true',
         '--timeout=60s',
-      ]).catch((err) => this.log(`Could not clean up gvisor-default SandboxConfig: ${err.message}`, 'warn'));
+      ]).catch(err =>
+        this.log(`Could not clean up gvisor-default SandboxConfig: ${err.message}`, 'warn')
+      );
 
       for (const release of [SUBSTRATE_RELEASE, SUBSTRATE_CRDS_RELEASE]) {
         try {
