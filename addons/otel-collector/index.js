@@ -8,6 +8,7 @@ import { tmpdir } from 'os';
 const DEFAULT_CHART_VERSION = '0.158.0';
 const OTEL_HELM_REPO = 'https://open-telemetry.github.io/opentelemetry-helm-charts';
 const RELEASE_NAME = 'otel-collector';
+const SERVICE_MONITOR_NAME = 'otel-collector-substrate-metrics';
 
 /**
  * Minimal standalone OTel Collector that catches OTLP traces/metrics/logs from
@@ -29,8 +30,11 @@ const RELEASE_NAME = 'otel-collector';
  * metrics keep the original exporter/table names unchanged since those already populate
  * correctly as-is.
  *
- * Deliberately narrower than the `telemetry` addon: no Grafana/Tempo/Loki/Prometheus,
- * just enough to unblock kagent's own dashboards (worker pool occupancy, chat spans).
+ * Also fans out a copy of traces to Tempo and metrics to Prometheus for the `telemetry`
+ * addon (installed separately) via `otlp/tempo` and `prometheus` exporters, plus a
+ * ServiceMonitor so that addon's Prometheus scrapes this collector's `:8889/metrics`.
+ * Otherwise deliberately narrower than the `telemetry` addon: no Grafana/Loki, just
+ * enough to unblock kagent's own dashboards (worker pool occupancy, chat spans).
  *
  * Stamps a `cluster_name` resource attribute on every signal -- kagent-ui's tracing
  * page filters `ListChatTraces` results client-side by `trace.cluster ===
@@ -56,6 +60,9 @@ export class OtelCollectorFeature extends AddonFeature {
     // Matches the kagent-ui chart's own default (EXTENSION_LOCAL_CLUSTER_NAME) --
     // override here if that chart's cluster name was changed from its default.
     this.clusterName = config.clusterName || 'mgmt-cluster';
+    // Namespace the `telemetry` addon installs into - used to build Tempo's in-cluster
+    // OTLP endpoint. The two addons don't share any other config today.
+    this.telemetryNamespace = config.telemetryNamespace || 'telemetry';
     this.kubeContext = config.kubeContext || null;
   }
 
@@ -68,12 +75,27 @@ export class OtelCollectorFeature extends AddonFeature {
     return `${RELEASE_NAME}-opentelemetry-collector.${this.namespace}.svc.cluster.local:4317`;
   }
 
+  /**
+   * Tempo's in-cluster OTLP gRPC endpoint (grafana/tempo-distributed chart, release name
+   * "tempo" -- the distributor component is the one with the OTLP receiver, service name
+   * suffixed `-distributor` by that chart's own convention).
+   */
+  get tempoEndpoint() {
+    return `tempo-distributor.${this.telemetryNamespace}.svc.cluster.local:4317`;
+  }
+
   async deploy() {
     this.log(`Installing OTel Collector ${this.chartVersion} (ClickHouse exporter)...`, 'info');
 
     await this.addHelmRepo();
     await this.installCollector();
     await this.waitForCollector();
+
+    try {
+      await this.applyServiceMonitor();
+    } catch (error) {
+      this.log(`Failed to apply ServiceMonitor: ${error.message}`, 'warn');
+    }
 
     this.log(`OTel Collector installed successfully. Endpoint: ${this.endpoint}`, 'success');
   }
@@ -131,18 +153,29 @@ export class OtelCollectorFeature extends AddonFeature {
             logs_table_name: 'otel_logs_json',
             timeout: '10s',
           },
+          'otlp/tempo': {
+            endpoint: this.tempoEndpoint,
+            tls: { insecure: true },
+          },
+          prometheus: {
+            endpoint: '0.0.0.0:8889',
+            // Keeps the cluster_name resource attribute (stamped by resource/cluster_context
+            // below) as a Prometheus label -- without this the exporter drops resource
+            // attributes entirely.
+            resource_to_telemetry_conversion: { enabled: true },
+          },
         },
         service: {
           pipelines: {
             traces: {
               receivers: ['otlp'],
               processors: ['resource/cluster_context', 'batch'],
-              exporters: ['clickhouse/genai'],
+              exporters: ['clickhouse/genai', 'otlp/tempo'],
             },
             metrics: {
               receivers: ['otlp'],
               processors: ['resource/cluster_context', 'batch'],
-              exporters: ['clickhouse'],
+              exporters: ['clickhouse', 'prometheus'],
             },
             logs: {
               receivers: ['otlp'],
@@ -151,6 +184,9 @@ export class OtelCollectorFeature extends AddonFeature {
             },
           },
         },
+      },
+      ports: {
+        metrics: { enabled: true, containerPort: 8889, servicePort: 8889, protocol: 'TCP' },
       },
     };
   }
@@ -211,9 +247,32 @@ export class OtelCollectorFeature extends AddonFeature {
     }
   }
 
+  async applyServiceMonitor() {
+    await this.applyResource(
+      {
+        apiVersion: 'monitoring.coreos.com/v1',
+        kind: 'ServiceMonitor',
+        metadata: { name: SERVICE_MONITOR_NAME, namespace: this.namespace },
+        spec: {
+          selector: { matchLabels: { 'app.kubernetes.io/instance': RELEASE_NAME } },
+          namespaceSelector: { matchNames: [this.namespace] },
+          endpoints: [{ port: 'metrics', path: '/metrics', interval: '30s' }],
+        },
+      },
+      this.kubeContext
+    );
+  }
+
   async cleanup() {
     this.log('Cleaning up OTel Collector...', 'info');
     const helmCtxArgs = this.kubeContext ? ['--kube-context', this.kubeContext] : [];
+
+    await this.deleteResource(
+      'ServiceMonitor',
+      SERVICE_MONITOR_NAME,
+      this.namespace,
+      this.kubeContext
+    );
 
     try {
       await CommandRunner.run('helm', [

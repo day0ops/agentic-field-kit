@@ -2,19 +2,44 @@ apiVersion: agentic.demo/v1
 kind: Environment
 metadata:
   name: local
-  description: Local Kubernetes cluster (lok8s)
+  description: Bring-your-own Kubernetes cluster (bare-metal/Talos/kind), installed via `base install --context <name>`
 
 spec:
-  # No infraProfile or dns - purely local cluster
+  acme:
+    email: kasun.talwatta@solo.io
+
+  dns:
+    provider: cloudflare
+    childZone: agentic.lab
+    parentZone:
+      domain: day0ops.com
+    txtOwnerId: agentic-demo-local
+
   tls:
-    issuer: selfsigned-issuer
+    issuer: letsencrypt-dns
 
   # Okta tenant
   okta:
     domain: dev-12345.okta.com
 
   keycloak:
-    scheme: http
+    image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.4
+    scheme: https
+    loginTheme: keycloak-soloio-login-theme
+
+  agentgateway:
+    scheme: https
+    version: v2026.10.2
+
+  kagent:
+    scheme: https
+    version: 1.0.0-rc1
+
+  # Agent Substrate chart version
+  substrate:
+    version: 1.0.0-rc.1-76ace06f
+    registry: oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm
+    kubectlAteVersion: v1.0.0-rc1
 
   addons:
     cert-manager:
@@ -33,11 +58,26 @@ spec:
       otel:
         version: 0.165.0
 
-  # Domain mappings - auto-generated pattern: <service>.<childZone>.<parentDomain>
+  images:
+    # Must track kagent.version's release line - a stale digest fails ActorTemplate's
+    # /config materialization at rc1.
+    kagentHarness: ghcr.io/kagent-dev/kagent/golang-adk@sha256:5b06741be8cb69c9293477bdbf3203c6526127c533fa940fd9f595a82a801701
+    agoraDemo:
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-api:v0.6.4
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-console:v0.6.4
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-bids-mcp:v0.6.4
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-orders-mcp:v0.6.4
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-pricing-mcp:v0.6.4
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-trust-mcp:v0.6.4
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-demo-catalog-mcp:v0.6.4
+
+  # Real DNS under agentic.lab.day0ops.com (Cloudflare), managed by external-dns
   domains:
     core:
-      keycloak: keycloak.keycloak.svc.cluster.local
-      grafana: kube-prometheus-stack-grafana.telemetry.svc.cluster.local
-      soloUi: solo-enterprise-ui.solo-enterprise.svc.cluster.local
+      keycloak: keycloak.agentic.lab.day0ops.com
+      kagentUi: kagent-ui.agentic.lab.day0ops.com
+      grafana: grafana.agentic.lab.day0ops.com
+      agentgatewayUi: agw-ui.agentic.lab.day0ops.com
     app:
-      main: app.bookinfo.svc.cluster.local
+      main: app.agentic.lab.day0ops.com
+      agoraDemo: agora.agentic.lab.day0ops.com

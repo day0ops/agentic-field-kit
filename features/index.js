@@ -30,6 +30,9 @@ import { AgentcoreGatewayFeature } from './agentic/agentcore-gateway/index.js';
 import { ProvidersFeature } from './agentic/providers/index.js';
 import { TokenExchangePolicyFeature } from './agentic/token-exchange-policy/index.js';
 import { AgentgatewayA2ARouteFeature } from './agentic/agentgateway-a2a-route/index.js';
+import { SubstrateA2ARouteFeature } from './agentic/substrate-a2a-route/index.js';
+import { McpGatewayRouteFeature } from './agentic/mcp-gateway-route/index.js';
+import { KagentRbacPolicyFeature } from './agentic/kagent-rbac-policy/index.js';
 import { McpToolPolicyFeature } from './agentic/mcp-tool-policy/index.js';
 import { McpCodemodeRouteFeature } from './agentic/mcp-codemode-route/index.js';
 import { BudgetPolicyFeature } from './agentic/budget-policy/index.js';
@@ -42,6 +45,9 @@ import { SubstrateAgentFeature } from './agentic/substrate-agent/index.js';
 import { FraudOpsConsoleFeature } from './agentic/fraud-ops-console/index.js';
 import { KagentAccessPolicyFeature } from './agentic/kagent-access-policy/index.js';
 import { AccessPolicyTestHarnessFeature } from './agentic/access-policy-test-harness/index.js';
+import { AgoraConsoleFeature } from './agentic/agora-console/index.js';
+import { RateLimitPolicyFeature } from './agentic/rate-limit-policy/index.js';
+import { OpenapiMcpBackendFeature } from './agentic/openapi-mcp-backend/index.js';
 
 // Security Features
 import { WaypointFeature } from './security/waypoint/index.js';
@@ -86,6 +92,9 @@ FeatureManager.register('agentcore-gateway', AgentcoreGatewayFeature);
 FeatureManager.register('providers', ProvidersFeature);
 FeatureManager.register('token-exchange-policy', TokenExchangePolicyFeature);
 FeatureManager.register('agentgateway-a2a-route', AgentgatewayA2ARouteFeature);
+FeatureManager.register('substrate-a2a-route', SubstrateA2ARouteFeature);
+FeatureManager.register('mcp-gateway-route', McpGatewayRouteFeature);
+FeatureManager.register('kagent-rbac-policy', KagentRbacPolicyFeature);
 FeatureManager.register('mcp-tool-policy', McpToolPolicyFeature);
 FeatureManager.register('mcp-codemode-route', McpCodemodeRouteFeature);
 FeatureManager.register('budget-policy', BudgetPolicyFeature);
@@ -98,6 +107,9 @@ FeatureManager.register('substrate-agent', SubstrateAgentFeature);
 FeatureManager.register('fraud-ops-console', FraudOpsConsoleFeature);
 FeatureManager.register('kagent-access-policy', KagentAccessPolicyFeature);
 FeatureManager.register('access-policy-test-harness', AccessPolicyTestHarnessFeature);
+FeatureManager.register('agora-console', AgoraConsoleFeature);
+FeatureManager.register('rate-limit-policy', RateLimitPolicyFeature);
+FeatureManager.register('openapi-mcp-backend', OpenapiMcpBackendFeature);
 
 // Security
 FeatureManager.register('waypoint', WaypointFeature);
@@ -144,6 +156,9 @@ export { AgentcoreGatewayFeature } from './agentic/agentcore-gateway/index.js';
 export { ProvidersFeature } from './agentic/providers/index.js';
 export { TokenExchangePolicyFeature } from './agentic/token-exchange-policy/index.js';
 export { AgentgatewayA2ARouteFeature } from './agentic/agentgateway-a2a-route/index.js';
+export { SubstrateA2ARouteFeature } from './agentic/substrate-a2a-route/index.js';
+export { McpGatewayRouteFeature } from './agentic/mcp-gateway-route/index.js';
+export { KagentRbacPolicyFeature } from './agentic/kagent-rbac-policy/index.js';
 export { McpToolPolicyFeature } from './agentic/mcp-tool-policy/index.js';
 export { McpCodemodeRouteFeature } from './agentic/mcp-codemode-route/index.js';
 export { BudgetPolicyFeature } from './agentic/budget-policy/index.js';
@@ -156,6 +171,9 @@ export { SubstrateAgentFeature } from './agentic/substrate-agent/index.js';
 export { FraudOpsConsoleFeature } from './agentic/fraud-ops-console/index.js';
 export { KagentAccessPolicyFeature } from './agentic/kagent-access-policy/index.js';
 export { AccessPolicyTestHarnessFeature } from './agentic/access-policy-test-harness/index.js';
+export { AgoraConsoleFeature } from './agentic/agora-console/index.js';
+export { RateLimitPolicyFeature } from './agentic/rate-limit-policy/index.js';
+export { OpenapiMcpBackendFeature } from './agentic/openapi-mcp-backend/index.js';
 
 // Security
 export { WaypointFeature } from './security/waypoint/index.js';

@@ -53,10 +53,14 @@ export KAGENT_REALM_DEFAULT_PASSWORD=<password> # Required only when a 'kagent' 
 export AGENTREGISTRY_REALM_DEFAULT_PASSWORD=<password> # Required only when an 'agentregistry' realm is configured
 export RETAIL_RETURNS_CUSTOMER_PASSWORD=<password> # Required only when a 'retail-returns-customers' realm is configured
 export CARRIER_PORTAL_REALM_DEFAULT_PASSWORD=<password> # Required only when a 'carrier-portal' realm is configured
+export AGORA_CUSTOMER_PASSWORD=<password>    # Required only when demo-buyer/demo-seller/demo-operator users are configured (per-user override, not a separate realm)
 
 # telemetry addon, full mode (no defaults - deploy fails cleanly if unset)
 export GRAFANA_ADMIN_USERNAME=<user>         # Grafana admin login username
 export GRAFANA_ADMIN_PASSWORD=<password>     # Grafana admin login password
+
+# cert-manager and external-dns addons, provider=cloudflare (no defaults - deploy fails cleanly if unset)
+export CLOUDFLARE_API_TOKEN=<token>          # Cloudflare API token with DNS edit permission on the target zone
 ```
 
 ## Style

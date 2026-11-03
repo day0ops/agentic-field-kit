@@ -14,6 +14,15 @@ export function envVarsFor(addonCfg, _clusterName) {
       },
     ];
   }
+  if (letsencrypt?.enabled && letsencrypt.provider === 'cloudflare') {
+    return [
+      {
+        name: 'CLOUDFLARE_API_TOKEN',
+        description: 'Cloudflare API token with DNS edit permission on the target zone',
+        required: true,
+      },
+    ];
+  }
   return [];
 }
 
@@ -42,6 +51,7 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, _env)
   const letsencrypt = addonCfg.config?.letsencrypt;
   const ctx = `$${clusterName.toUpperCase()}_CONTEXT`;
   const isCloudDns = letsencrypt?.enabled && letsencrypt.provider === 'clouddns';
+  const isCloudflare = letsencrypt?.enabled && letsencrypt.provider === 'cloudflare';
 
   const selfSignedIssuer = `
 
@@ -82,6 +92,39 @@ spec:
       - dns01:
           cloudDNS:
             project: ${project}
+EOF
+\`\`\``;
+  } else if (isCloudflare) {
+    const email = tpl(letsencrypt.email, null) || '$ACME_EMAIL';
+    clusterIssuer += `
+
+Create the Cloudflare API token secret (no ambient-credential mechanism available) and the
+Cloudflare DNS ClusterIssuer for Let's Encrypt:
+
+\`\`\`bash
+kubectl create secret generic cert-manager-cloudflare-api-token \\
+  --context ${ctx} \\
+  -n ${ns} \\
+  --from-literal=api-token="$CLOUDFLARE_API_TOKEN" \\
+  --dry-run=client -o yaml | kubectl apply --context ${ctx} -f -
+
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns
+spec:
+  acme:
+    email: ${email}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-dns
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cert-manager-cloudflare-api-token
+              key: api-token
 EOF
 \`\`\``;
   } else if (letsencrypt?.enabled) {

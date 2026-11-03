@@ -56,6 +56,18 @@ export class AgentgatewayFeature extends AddonFeature {
     this.tracesCollectorName = config.tracesCollectorName || 'opentelemetry-collector-traces';
     this.tracesCollectorNamespace = config.tracesCollectorNamespace || 'telemetry';
     this.tracingRandomSampling = config.tracingRandomSampling !== false ? 'true' : 'false';
+    // The enterprise-agentgateway-ui subchart (chart default: disabled). No chart-native
+    // HTTPRoute support, so Gateway/Certificate/HTTPRoute are built here, like kagent-ui's.
+    this.ui = config.ui?.enabled
+      ? {
+          hostname: config.ui.hostname,
+          tlsSecretName: config.ui.tls?.secretName || 'agentgateway-ui-tls',
+          tlsIssuer: config.ui.tls?.issuer || 'letsencrypt-dns',
+          oidcIssuer: config.ui.oidc?.issuer,
+          backendClientSecret: config.ui.oidc?.backendClientSecret,
+          roleMappings: config.ui.oidc?.roleMappings || null,
+        }
+      : null;
     // Enables the controller's token-exchange/elicitation STS (chart default: disabled).
     // jwtIssuer must be a real per-environment URL, so it's templated addon config here
     // rather than a static values.yaml entry.
@@ -82,6 +94,11 @@ export class AgentgatewayFeature extends AddonFeature {
     if (this.tokenExchange && (!this.tokenExchange.issuer || !this.tokenExchange.jwtIssuer)) {
       throw new Error(
         'tokenExchange.enabled requires tokenExchange.issuer and tokenExchange.jwtIssuer to also be set'
+      );
+    }
+    if (this.ui && (!this.ui.hostname || !this.ui.oidcIssuer || !this.ui.backendClientSecret)) {
+      throw new Error(
+        'ui.enabled requires ui.hostname, ui.oidc.issuer, and ui.oidc.backendClientSecret to also be set'
       );
     }
     return true;
@@ -161,6 +178,9 @@ export class AgentgatewayFeature extends AddonFeature {
     if (this.tokenExchange) {
       mainArgs.push(...this.buildTokenExchangeHelmArgs());
     }
+    if (this.ui) {
+      mainArgs.push(...this.buildUiHelmArgs());
+    }
     await KubernetesHelper.helm(mainArgs, { spinner: this.spinner });
     await KubernetesHelper.assertHelmDeployed(this.mainRelease, this.namespace, this.kubeContext);
 
@@ -171,6 +191,10 @@ export class AgentgatewayFeature extends AddonFeature {
       this.spinner,
       this.kubeContext
     );
+
+    if (this.ui) {
+      await this.deployUiGateway();
+    }
 
     if (this.gateway) {
       // Ensure the namespace exists before anything gets applied into it (the Certificate
@@ -328,6 +352,103 @@ export class AgentgatewayFeature extends AddonFeature {
       '--set-json',
       `tokenExchange.actorValidators=${actorValidators}`,
     ];
+  }
+
+  // Sets the enterprise-agentgateway-ui subchart's values. Client IDs stay at chart
+  // defaults -- Keycloak clients must match those exact IDs.
+  buildUiHelmArgs() {
+    const args = [
+      '--set',
+      'ui.enabled=true',
+      '--set-string',
+      `ui.oidc.issuer=${this.ui.oidcIssuer}`,
+      '--set-string',
+      `ui.backend.oidc.secret=${this.ui.backendClientSecret}`,
+      // Chart default reserves 2 CPUs for the bundled ClickHouse -- too much for a demo
+      // cluster (same fix as the kagent addon's own clickhouse override).
+      '--set',
+      'ui.clickhouse.resources.requests.cpu=300m',
+    ];
+    if (this.ui.roleMappings) {
+      args.push(
+        '--set-json',
+        `ui.rbac.roleMapping.roleMappings=${JSON.stringify(this.ui.roleMappings)}`
+      );
+    }
+    return args;
+  }
+
+  // Certificate + Gateway + HTTPRoute for the UI's HTTPS listener -- no chart-native
+  // HTTPRoute support, unlike kagent-ui's alpha chart, so built directly here.
+  async deployUiGateway() {
+    const certName = this.ui.tlsSecretName;
+    this.log(`Provisioning agentgateway UI certificate '${certName}'...`);
+    await this.applyResource(
+      {
+        apiVersion: 'cert-manager.io/v1',
+        kind: 'Certificate',
+        metadata: { name: certName, namespace: this.namespace },
+        spec: {
+          secretName: certName,
+          issuerRef: { name: this.ui.tlsIssuer, kind: 'ClusterIssuer' },
+          dnsNames: [this.ui.hostname],
+        },
+      },
+      this.kubeContext
+    );
+    await this.waitForCertificate(this.namespace, certName);
+
+    const spec = {
+      gatewayClassName: 'enterprise-agentgateway',
+      listeners: [
+        {
+          name: 'https',
+          port: 443,
+          protocol: 'HTTPS',
+          hostname: this.ui.hostname,
+          tls: { mode: 'Terminate', certificateRefs: [{ name: certName, kind: 'Secret' }] },
+          allowedRoutes: { namespaces: { from: 'Same' } },
+        },
+      ],
+    };
+    if (this.ambientEnabled) {
+      spec.infrastructure = {
+        annotations: { 'ambient.istio.io/bypass-inbound-capture': 'true' },
+      };
+    }
+    await this.applyResource(
+      {
+        apiVersion: 'gateway.networking.k8s.io/v1',
+        kind: 'Gateway',
+        metadata: { name: 'agentgateway-ui-https', namespace: this.namespace },
+        spec,
+      },
+      this.kubeContext
+    );
+
+    await this.applyResource(
+      {
+        apiVersion: 'gateway.networking.k8s.io/v1',
+        kind: 'HTTPRoute',
+        metadata: { name: 'agentgateway-ui', namespace: this.namespace },
+        spec: {
+          parentRefs: [{ name: 'agentgateway-ui-https', namespace: this.namespace }],
+          hostnames: [this.ui.hostname],
+          rules: [
+            {
+              matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+              backendRefs: [{ name: 'enterprise-agentgateway-ui', port: 80 }],
+            },
+          ],
+        },
+      },
+      this.kubeContext
+    );
+
+    this.log(
+      `Agentgateway UI Gateway 'agentgateway-ui-https' created for https://${this.ui.hostname}`,
+      'success'
+    );
   }
 
   buildGatewayResource(gatewayClassName) {
@@ -581,6 +702,23 @@ export class AgentgatewayFeature extends AddonFeature {
     this.log('Removing agentgateway');
     const helmCtxArgs = this.kubeContext ? ['--kube-context', this.kubeContext] : [];
     const kubectlCtxArgs = this.kubeContext ? [`--context=${this.kubeContext}`] : [];
+
+    if (this.ui) {
+      await this.deleteResource('httproute', 'agentgateway-ui', this.namespace, this.kubeContext);
+      await this.deleteResource(
+        'gateway',
+        'agentgateway-ui-https',
+        this.namespace,
+        this.kubeContext
+      );
+      await this.deleteResource(
+        'certificate',
+        this.ui.tlsSecretName,
+        this.namespace,
+        this.kubeContext
+      );
+      await this.deleteResource('secret', this.ui.tlsSecretName, this.namespace, this.kubeContext);
+    }
 
     if (this.gateway) {
       if (this.globalGateway) {

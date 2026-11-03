@@ -113,6 +113,11 @@ async function _generateGateway(addonCfg, clusterName, env) {
   // below uses a *quoted* heredoc (`<<'EOF'`) so it must keep the literal instead.
   const grafanaHostnameRef = tpl(cfg.grafanaHostname, null) || '$GRAFANA_HOSTNAME';
   const grafanaTls = cfg.grafanaTls || {};
+  const gatewayClassName = cfg.gatewayClassName || 'istio';
+  const grafanaSourceRanges = Array.isArray(cfg.sourceRanges) ? cfg.sourceRanges : null;
+  // Mirrors index.js: the AWS NLB annotation path only applies to Istio-classed Gateways --
+  // a non-Istio GatewayClass needs the native EnterpriseAgentgatewayParameters CR instead.
+  const useAgentgatewayParams = Boolean(grafanaSourceRanges) && gatewayClassName !== 'istio';
   const grafanaOidc = cfg.grafanaOidc || {};
   const globalExport = cfg.globalExport === true;
 
@@ -162,7 +167,26 @@ spec:
   dnsNames:
     - ${grafanaHostnameRef}
 EOF
-
+${
+  useAgentgatewayParams
+    ? `
+# CIDR allowlist for the Gateway's public LB (non-Istio GatewayClass, e.g. GCP +
+# enterprise-agentgateway -- the AWS NLB annotations path above doesn't apply here)
+kubectl apply -f - <<EOF
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayParameters
+metadata:
+  name: grafana-https-params
+  namespace: ${ns}
+spec:
+  service:
+    spec:
+      loadBalancerSourceRanges:
+${grafanaSourceRanges.map(r => `        - ${r}`).join('\n')}
+EOF
+`
+    : ''
+}
 # Gateway
 kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
@@ -171,7 +195,7 @@ metadata:
   name: grafana
   namespace: ${ns}
 spec:
-  gatewayClassName: istio
+  gatewayClassName: ${gatewayClassName}
   listeners:
     - name: https
       port: 443
@@ -186,7 +210,16 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
-EOF
+${
+  useAgentgatewayParams
+    ? `  infrastructure:
+    parametersRef:
+      name: grafana-https-params
+      group: enterpriseagentgateway.solo.io
+      kind: EnterpriseAgentgatewayParameters
+`
+    : ''
+}EOF
 
 # HTTPRoute
 kubectl apply -f - <<EOF
@@ -272,6 +305,101 @@ Label OTel gateway as a global service so agent clusters can reach it over the a
 
 \`\`\`bash
 kubectl label svc opentelemetry-collector-gateway -n ${ns} solo.io/service-scope=global --overwrite
+\`\`\``
+    : '';
+
+  // Mirrors index.js's deployFull(): this.shouldInstallOtelCollectors (installOtelCollectors
+  // !== false). Profiles that run their own otel-collector addon set this false to skip
+  // this Istio-scraping fleet entirely.
+  const shouldInstallOtelCollectors = cfg.installOtelCollectors !== false;
+  const otelCollectorsSection = shouldInstallOtelCollectors
+    ? `
+Install OTel collectors (metrics, logs, traces) — receives telemetry from the local Istio mesh:
+
+\`\`\`bash
+# Metrics collector (scrapes istiod, ztunnel, gateways)
+helm upgrade --install opentelemetry-collector-metrics opentelemetry-collector \\
+  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
+  --version $OTEL_CHART_VERSION \\
+  --namespace ${ns} \\
+  --set mode=deployment \\
+  --set image.repository=otel/opentelemetry-collector-contrib \\
+  --set command.name=otelcol-contrib \\
+  --create-namespace \\
+  -f - <<'EOF'
+${metricsValues.trimEnd()}
+EOF
+
+# Logs collector (receives OTLP logs from gateways)
+helm upgrade --install opentelemetry-collector-logs opentelemetry-collector \\
+  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
+  --version $OTEL_CHART_VERSION \\
+  --namespace ${ns} \\
+  --set mode=deployment \\
+  --set image.repository=otel/opentelemetry-collector-contrib \\
+  --set command.name=otelcol-contrib \\
+  -f - <<'EOF'
+${logsValues.trimEnd()}
+EOF
+
+# Traces collector (OTLP receiver, forwards to Tempo)
+helm upgrade --install opentelemetry-collector-traces opentelemetry-collector \\
+  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
+  --version $OTEL_CHART_VERSION \\
+  --namespace ${ns} \\
+  --set mode=deployment \\
+  --set image.repository=otel/opentelemetry-collector-contrib \\
+  --set command.name=otelcol-contrib \\
+  -f - <<'EOF'
+${tracesValues.trimEnd()}
+EOF
+\`\`\`
+
+Install OTel gateway collector (cross-cluster fan-in from agent clusters):
+
+\`\`\`bash
+helm upgrade --install opentelemetry-collector-gateway opentelemetry-collector \\
+  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
+  --version $OTEL_CHART_VERSION \\
+  --namespace ${ns} \\
+  --set mode=deployment \\
+  --set image.repository=otel/opentelemetry-collector-contrib \\
+  --set command.name=otelcol-contrib \\
+  -f - <<'EOF'
+${gatewayValues.trimEnd()}
+EOF
+\`\`\`
+`
+    : '';
+
+  // Mirrors index.js: installDashboards() is gated on shouldInstallDashboards
+  // (installDashboards !== false), default on.
+  const shouldInstallDashboards = cfg.installDashboards !== false;
+  const dashboardCategories = Array.isArray(cfg.dashboardCategories)
+    ? cfg.dashboardCategories
+    : null;
+  const dashboardsSection = shouldInstallDashboards
+    ? `
+
+Install Grafana dashboards: local JSON files under \`dashboards/<category>/*.json\`${
+        dashboardCategories ? ` (categories: \`${dashboardCategories.join('`, `')}\`)` : ''
+      } are applied as ConfigMaps labeled \`grafana_dashboard: "1"\`, picked up automatically by the
+kube-prometheus-stack Grafana sidecar -- no restart needed, one ConfigMap per dashboard:
+
+\`\`\`bash
+kubectl apply -n ${ns} -f - <<'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-<name>
+  namespace: ${ns}
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/managed-by: agentic-demo
+data:
+  <name>.json: |
+    <dashboard JSON>
+EOF
 \`\`\``
     : '';
 
@@ -362,62 +490,7 @@ ${prometheusValues.trimEnd()}
 EOF
 \`\`\`
 ${grafanaOidcValuesBlock}${grafanaOidcNote}
-Install OTel collectors (metrics, logs, traces) — receives telemetry from the local Istio mesh:
-
-\`\`\`bash
-# Metrics collector (scrapes istiod, ztunnel, gateways)
-helm upgrade --install opentelemetry-collector-metrics opentelemetry-collector \\
-  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
-  --version $OTEL_CHART_VERSION \\
-  --namespace ${ns} \\
-  --set mode=deployment \\
-  --set image.repository=otel/opentelemetry-collector-contrib \\
-  --set command.name=otelcol-contrib \\
-  --create-namespace \\
-  -f - <<'EOF'
-${metricsValues.trimEnd()}
-EOF
-
-# Logs collector (receives OTLP logs from gateways)
-helm upgrade --install opentelemetry-collector-logs opentelemetry-collector \\
-  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
-  --version $OTEL_CHART_VERSION \\
-  --namespace ${ns} \\
-  --set mode=deployment \\
-  --set image.repository=otel/opentelemetry-collector-contrib \\
-  --set command.name=otelcol-contrib \\
-  -f - <<'EOF'
-${logsValues.trimEnd()}
-EOF
-
-# Traces collector (OTLP receiver, forwards to Tempo)
-helm upgrade --install opentelemetry-collector-traces opentelemetry-collector \\
-  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
-  --version $OTEL_CHART_VERSION \\
-  --namespace ${ns} \\
-  --set mode=deployment \\
-  --set image.repository=otel/opentelemetry-collector-contrib \\
-  --set command.name=otelcol-contrib \\
-  -f - <<'EOF'
-${tracesValues.trimEnd()}
-EOF
-\`\`\`
-
-Install OTel gateway collector (cross-cluster fan-in from agent clusters):
-
-\`\`\`bash
-helm upgrade --install opentelemetry-collector-gateway opentelemetry-collector \\
-  --repo https://open-telemetry.github.io/opentelemetry-helm-charts \\
-  --version $OTEL_CHART_VERSION \\
-  --namespace ${ns} \\
-  --set mode=deployment \\
-  --set image.repository=otel/opentelemetry-collector-contrib \\
-  --set command.name=otelcol-contrib \\
-  -f - <<'EOF'
-${gatewayValues.trimEnd()}
-EOF
-\`\`\`
-${grafanaTlsSection}
+${otelCollectorsSection}${grafanaTlsSection}
 
 Apply Grafana datasources (Prometheus, Tempo, Loki):
 
@@ -436,6 +509,7 @@ data:
 ${datasourcesIndented}
 EOF
 \`\`\`
+${dashboardsSection}
 ${globalExportSection}`;
 }
 
@@ -550,9 +624,12 @@ export function cleanup(addonCfg, clusterName) {
 helm uninstall opentelemetry-collector-metrics opentelemetry-collector-logs opentelemetry-collector-traces alloy -n ${ns} ${ctx}
 \`\`\``;
   }
+  const otelCollectorsLine =
+    cfg.installOtelCollectors !== false
+      ? `helm uninstall opentelemetry-collector-gateway opentelemetry-collector-traces opentelemetry-collector-logs opentelemetry-collector-metrics -n ${ns} ${ctx}\n`
+      : '';
   return `\`\`\`bash
-helm uninstall opentelemetry-collector-gateway opentelemetry-collector-traces opentelemetry-collector-logs opentelemetry-collector-metrics -n ${ns} ${ctx}
-helm uninstall kube-prometheus-stack -n ${ns} ${ctx}
+${otelCollectorsLine}helm uninstall kube-prometheus-stack -n ${ns} ${ctx}
 helm uninstall alloy -n ${ns} ${ctx}
 helm uninstall loki -n ${ns} ${ctx}
 helm uninstall tempo -n ${ns} ${ctx}

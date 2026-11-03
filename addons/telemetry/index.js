@@ -56,7 +56,8 @@ const helmSetEscape = value => String(value).replace(/\\/g, '\\\\').replace(/,/g
  * - ztunnel   — L4 proxy metrics (ambient mode)
  * - gateway   — waypoint + east-west gateway metrics
  *
- * Dashboards (from Solo COP, downloaded at install or from local dashboards/):
+ * Dashboards (from Solo COP, downloaded at install, or from local
+ * dashboards/<category>/*.json plus any loose *.json directly under dashboards/):
  * - istio-performance-dashboard
  * - istio-peering-dashboard
  * - istio-global-services-dashboard
@@ -91,8 +92,22 @@ const helmSetEscape = value => String(value).replace(/\\/g, '\\\\').replace(/,/g
  *   prometheusHostname: string,   // Optional: external-dns hostname for Prometheus
  *   tempoHostname: string,        // Optional: external-dns hostname for Tempo
  *   lokiHostname: string,         // Optional: external-dns hostname for Loki
+ *   gatewayClassName: string,     // GatewayClass for the Grafana Gateway. Default: 'istio'.
+ *                                 // Set to a non-Istio GatewayClass (e.g. 'enterprise-agentgateway')
+ *                                 // on clusters without Istio Ambient mesh installed - this also
+ *                                 // skips applying the Istio-only Telemetry CR.
  *   installDashboards: boolean,   // Default: true
+ *   dashboardCategories: string[], // Subdirectory names under dashboards/ to install
+ *                                  // (e.g. ['agw', 'substrate']). Default: null, meaning install
+ *                                  // every category subdirectory found, plus any loose .json files
+ *                                  // directly under dashboards/. An explicit list installs only
+ *                                  // those categories - loose files are excluded, since they were
+ *                                  // never assigned to any category.
  *   globalExport: boolean,        // Default: false — label Loki/Tempo/Prometheus as global services
+ *   sourceRanges: string[],       // Optional: CIDR allowlist for the Grafana Gateway's public LB.
+ *                                 // Applied as AWS NLB annotations when gatewayClassName is 'istio',
+ *                                 // or as a native EnterpriseAgentgatewayParameters
+ *                                 // loadBalancerSourceRanges otherwise (e.g. GCP + enterprise-agentgateway).
  * }
  *
  * Configuration (mode: 'agent'):
@@ -144,6 +159,10 @@ export class TelemetryFeature extends AddonFeature {
       this.storageClass = this.database?.storageClass || config.storageClass || '';
       this.storageSize = this.database?.storageSize || config.storageSize || '50Gi';
       this.grafanaTls = config.grafanaTls || null;
+      this.gatewayClassName = config.gatewayClassName || 'istio';
+      this.dashboardCategories = Array.isArray(config.dashboardCategories)
+        ? config.dashboardCategories
+        : null;
       this.grafanaSourceRanges = config.sourceRanges || null;
       this.grafanaOidc = config.grafanaOidc || null;
       this.globalExport = config.globalExport === true;
@@ -295,12 +314,45 @@ export class TelemetryFeature extends AddonFeature {
       this.kubeContext
     );
 
-    const nlbAnnotations = nlbSourceRangeAnnotations(this.grafanaSourceRanges);
+    // nlbSourceRangeAnnotations emits AWS NLB-specific annotations -- only meaningful when
+    // the Gateway is Istio-backed (every existing profile using sourceRanges today). A
+    // non-Istio GatewayClass (e.g. enterprise-agentgateway on GCP) needs the native
+    // EnterpriseAgentgatewayParameters mechanism below instead, same as kagent's own UI Gateway.
+    const useAgentgatewayParams =
+      Boolean(this.grafanaSourceRanges) && this.gatewayClassName !== 'istio';
+    const nlbAnnotations = useAgentgatewayParams
+      ? null
+      : nlbSourceRangeAnnotations(this.grafanaSourceRanges);
+
+    if (useAgentgatewayParams) {
+      await this.applyResource(
+        {
+          apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
+          kind: 'EnterpriseAgentgatewayParameters',
+          metadata: { name: 'grafana-https-params', namespace: this.namespace },
+          spec: { service: { spec: { loadBalancerSourceRanges: this.grafanaSourceRanges } } },
+        },
+        this.kubeContext
+      );
+    }
+
+    const infrastructure = useAgentgatewayParams
+      ? {
+          parametersRef: {
+            name: 'grafana-https-params',
+            group: 'enterpriseagentgateway.solo.io',
+            kind: 'EnterpriseAgentgatewayParameters',
+          },
+        }
+      : nlbAnnotations
+        ? { annotations: nlbAnnotations }
+        : null;
 
     await this.applyYamlFile(
       'grafana-gateway.yaml',
       {
         spec: {
+          gatewayClassName: this.gatewayClassName,
           listeners: [
             {
               name: 'https',
@@ -314,7 +366,7 @@ export class TelemetryFeature extends AddonFeature {
               allowedRoutes: { namespaces: { from: 'All' } },
             },
           ],
-          ...(nlbAnnotations ? { infrastructure: { annotations: nlbAnnotations } } : {}),
+          ...(infrastructure ? { infrastructure } : {}),
         },
       },
       this.kubeContext
@@ -336,7 +388,11 @@ export class TelemetryFeature extends AddonFeature {
       this.kubeContext
     );
 
-    await this.applyYamlFile('grafana-gateway-telemetry.yaml', {}, this.kubeContext);
+    if (this.gatewayClassName === 'istio') {
+      // This Telemetry CR only silences Istio's own tracing double-count on this Gateway
+      // listener - meaningless (and its CRD doesn't exist) when the Gateway isn't Istio-backed.
+      await this.applyYamlFile('grafana-gateway-telemetry.yaml', {}, this.kubeContext);
+    }
 
     this.log('Grafana HTTPS resources applied', 'info');
   }
@@ -943,26 +999,73 @@ export class TelemetryFeature extends AddonFeature {
   }
 
   /**
+   * Resolves which local dashboard JSON files apply under the current dashboardCategories
+   * filter. Loose .json files directly under dashboards/ were never assigned to a category,
+   * so they're only included in the default (dashboardCategories === null) "discover
+   * everything" mode - an explicit list excludes them, same as any non-matching category.
+   * Returns [{ name, dir, category }], `category` null for loose files.
+   */
+  async _resolveDashboardEntries() {
+    const results = [];
+    if (!existsSync(DASHBOARDS_DIR)) return results;
+
+    const entries = await readdir(DASHBOARDS_DIR, { withFileTypes: true });
+
+    if (this.dashboardCategories === null) {
+      for (const entry of entries.filter(e => e.isFile() && e.name.endsWith('.json'))) {
+        results.push({
+          name: entry.name.replace('.json', ''),
+          dir: DASHBOARDS_DIR,
+          category: null,
+        });
+      }
+    }
+
+    const categories =
+      this.dashboardCategories || entries.filter(e => e.isDirectory()).map(e => e.name);
+
+    for (const category of categories) {
+      const categoryDir = join(DASHBOARDS_DIR, category);
+      if (!existsSync(categoryDir)) {
+        this.log(`Dashboard category '${category}' not found, skipping`, 'warn');
+        continue;
+      }
+      const files = (await readdir(categoryDir)).filter(f => f.endsWith('.json'));
+      for (const file of files) {
+        results.push({ name: file.replace('.json', ''), dir: categoryDir, category });
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * Install Solo Istio Grafana dashboards: local dashboards/ JSON first, else download
    * from Solo COP. ConfigMaps labeled grafana_dashboard=1 for the kube-prometheus-stack sidecar.
    */
   async installDashboards() {
     this.log('Installing Solo Istio Grafana dashboards...', 'info');
 
-    // Prefer local JSON files
-    if (existsSync(DASHBOARDS_DIR)) {
-      const files = await readdir(DASHBOARDS_DIR);
-      const jsonFiles = files.filter(f => f.endsWith('.json'));
+    const dashboardEntries = await this._resolveDashboardEntries();
+    for (const { name, dir, category } of dashboardEntries) {
+      const content = await readFile(join(dir, `${name}.json`), 'utf8');
+      await this.createDashboardConfigMap(name, content);
+      this.log(
+        `Dashboard '${name}' applied from local file${category ? ` (${category})` : ''}`,
+        'info'
+      );
+    }
 
-      if (jsonFiles.length > 0) {
-        for (const file of jsonFiles) {
-          const name = file.replace('.json', '');
-          const content = await readFile(join(DASHBOARDS_DIR, file), 'utf8');
-          await this.createDashboardConfigMap(name, content);
-          this.log(`Dashboard '${name}' applied from local file`, 'info');
-        }
-        return;
-      }
+    if (dashboardEntries.length > 0) return;
+
+    if (this.dashboardCategories) {
+      // Categories were explicitly scoped (e.g. away from Istio); don't silently
+      // substitute unrelated Istio-only Solo COP dashboards.
+      this.log(
+        `No dashboards found for configured categories [${this.dashboardCategories.join(', ')}]; skipping Solo COP fallback`,
+        'warn'
+      );
+      return;
     }
 
     // Download from Solo COP GitHub
@@ -1060,17 +1163,13 @@ export class TelemetryFeature extends AddonFeature {
     // Remove datasource ConfigMap
     await this.deleteResource('configmap', 'grafana-datasources', this.namespace, this.kubeContext);
 
-    // Remove dashboard ConfigMaps
+    // Remove dashboard ConfigMaps (category-aware, mirrors installDashboards())
     const dashboardNames = [...SOLO_COP_DASHBOARDS];
-    if (existsSync(DASHBOARDS_DIR)) {
-      try {
-        const files = await readdir(DASHBOARDS_DIR);
-        for (const file of files.filter(f => f.endsWith('.json'))) {
-          dashboardNames.push(file.replace('.json', ''));
-        }
-      } catch {
-        // Ignore
-      }
+    try {
+      const entries = await this._resolveDashboardEntries();
+      dashboardNames.push(...entries.map(e => e.name));
+    } catch {
+      // Ignore
     }
     for (const name of [...new Set(dashboardNames)]) {
       await this.deleteResource(

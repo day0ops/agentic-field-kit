@@ -114,9 +114,12 @@ test('substrate config parses with defaults', () => {
     substrate: { enabled: true, workerPool: { workerImage: 'ghcr.io/x/ateom-gvisor:v0' } },
   });
   expect(f.substrate.enabled).toBe(true);
-  expect(f.substrate.version).toBe('0.2.0-beta6-5462374');
+  expect(f.substrate.version).toBe('1.0.0-rc.1-76ace06f');
+  expect(f.substrate.registry).toBe(
+    'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm'
+  );
   expect(f.substrate.namespace).toBe('ate-system');
-  expect(f.substrate.kubectlAteVersion).toBe('v0.2.0-beta5');
+  expect(f.substrate.kubectlAteVersion).toBe('v1.0.0-rc1');
   expect(f.substrate.workerPool.name).toBe('kagent-default');
   expect(f.substrate.workerPool.replicas).toBe(1);
   expect(f.substrate.workerPool.workerImage).toBe('ghcr.io/x/ateom-gvisor:v0');
@@ -132,6 +135,7 @@ test('substrate config parses with overrides', () => {
     substrate: {
       enabled: true,
       version: '0.2.0-beta8',
+      registry: 'oci://example.com/custom-substrate-helm',
       namespace: 'custom-ate',
       kubectlAteVersion: 'v0.2.0-beta8',
       workerPool: {
@@ -149,6 +153,7 @@ test('substrate config parses with overrides', () => {
     },
   });
   expect(f.substrate.version).toBe('0.2.0-beta8');
+  expect(f.substrate.registry).toBe('oci://example.com/custom-substrate-helm');
   expect(f.substrate.namespace).toBe('custom-ate');
   expect(f.substrate.kubectlAteVersion).toBe('v0.2.0-beta8');
   expect(f.substrate.workerPool.name).toBe('custom-pool');
@@ -180,7 +185,7 @@ test('substrate snapshots backend derives s3 for an IRSA annotation key', () => 
 test('substrate workerPool.workerImage defaults to the chart version, no config required', () => {
   const f = new KagentFeature('kagent', { enterprise: true, substrate: { enabled: true } });
   expect(f.substrate.workerPool.workerImage).toBe(
-    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateom-gvisor:v0.2.0-beta6-5462374'
+    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v1.0.0-rc.1-76ace06f'
   );
 });
 
@@ -190,7 +195,7 @@ test('substrate workerPool.workerImage derives from an explicit substrate.versio
     substrate: { enabled: true, version: '0.2.0-beta8' },
   });
   expect(f.substrate.workerPool.workerImage).toBe(
-    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateom-gvisor:v0.2.0-beta8'
+    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v0.2.0-beta8'
   );
 });
 
@@ -258,7 +263,7 @@ test('_kubectlAteDownloadUrl builds a URL for the current platform', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   const url = f._kubectlAteDownloadUrl();
   expect(url).toStartWith(
-    'https://github.com/kagent-dev/substrate/releases/download/v0.2.0-beta5/kubectl-ate-'
+    'https://github.com/kagent-dev/substrate/releases/download/v1.0.0-rc1/kubectl-ate-'
   );
   expect(url).toMatch(/kubectl-ate-(darwin|linux)-(amd64|arm64)$/);
 });
