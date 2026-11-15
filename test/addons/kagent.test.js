@@ -36,7 +36,7 @@ test('KagentFeature constructor defaults (OSS)', () => {
 test('KagentFeature constructor defaults (enterprise)', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   expect(f.enterprise).toBe(true);
-  expect(f.version).toBe('0.4.4');
+  expect(f.version).toBe('2026.11.1');
   expect(f.crdsOci).toContain('kagent-enterprise-crds');
   expect(f.controllerOci).toContain('kagent-enterprise');
 });
@@ -52,7 +52,9 @@ test('KagentFeature OIDC issuer computed from keycloakHostname', () => {
     oidc: { keycloakHostname: 'keycloak.example.com', keycloakTlsEnabled: true, realm: 'kagent' },
   });
   expect(f.oidcIssuer).toBe('https://keycloak.example.com/realms/kagent');
-  expect(f.oidcClientId).toBe('kagent-backend');
+  // Default enterprise version is now the CalVer/alpha-chart line, so the alpha chart's own
+  // clientId convention applies (see 'oidcClientId defaults differ by chart line' below).
+  expect(f.oidcClientId).toBe('kagent-enterprise');
 });
 
 test('KagentFeature OIDC issuer explicit override wins', () => {
@@ -114,12 +116,12 @@ test('substrate config parses with defaults', () => {
     substrate: { enabled: true, workerPool: { workerImage: 'ghcr.io/x/ateom-gvisor:v0' } },
   });
   expect(f.substrate.enabled).toBe(true);
-  expect(f.substrate.version).toBe('1.0.0-rc.1-76ace06f');
+  expect(f.substrate.version).toBe('1.0.0-ff3be686');
   expect(f.substrate.registry).toBe(
     'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm'
   );
   expect(f.substrate.namespace).toBe('ate-system');
-  expect(f.substrate.kubectlAteVersion).toBe('v1.0.0-rc1');
+  expect(f.substrate.kubectlAteVersion).toBe('v1.0.0');
   expect(f.substrate.workerPool.name).toBe('kagent-default');
   expect(f.substrate.workerPool.replicas).toBe(1);
   expect(f.substrate.workerPool.workerImage).toBe('ghcr.io/x/ateom-gvisor:v0');
@@ -185,7 +187,7 @@ test('substrate snapshots backend derives s3 for an IRSA annotation key', () => 
 test('substrate workerPool.workerImage defaults to the chart version, no config required', () => {
   const f = new KagentFeature('kagent', { enterprise: true, substrate: { enabled: true } });
   expect(f.substrate.workerPool.workerImage).toBe(
-    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v1.0.0-rc.1-76ace06f'
+    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v1.0.0-ff3be686'
   );
 });
 
@@ -263,7 +265,7 @@ test('_kubectlAteDownloadUrl builds a URL for the current platform', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   const url = f._kubectlAteDownloadUrl();
   expect(url).toStartWith(
-    'https://github.com/kagent-dev/substrate/releases/download/v1.0.0-rc1/kubectl-ate-'
+    'https://github.com/kagent-dev/substrate/releases/download/v1.0.0/kubectl-ate-'
   );
   expect(url).toMatch(/kubectl-ate-(darwin|linux)-(amd64|arm64)$/);
 });
@@ -329,6 +331,15 @@ test('isAlphaChart is false for OSS and old enterprise chart versions', () => {
 test('isAlphaChart is true for 1.x enterprise versions', () => {
   const f = new KagentFeature('kagent', { enterprise: true, version: '1.0.0-alpha3' });
   expect(f.isAlphaChart).toBe(true);
+});
+
+test('isAlphaChart is true for CalVer enterprise versions (chart switched schemes at 2026.11.0)', () => {
+  expect(new KagentFeature('kagent', { enterprise: true, version: '2026.11.1' }).isAlphaChart).toBe(
+    true
+  );
+  expect(new KagentFeature('kagent', { enterprise: true, version: '2026.11.0' }).isAlphaChart).toBe(
+    true
+  );
 });
 
 test('oidcClientId defaults differ by chart line', () => {

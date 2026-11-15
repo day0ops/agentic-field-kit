@@ -5,7 +5,7 @@ import { resolveRunbookTemplates } from '../../src/lib/runbook-adapters/template
 const tpl = (v, fb) => (v && !/\{\{/.test(v) ? v : fb);
 
 const OSS_VERSION = '0.7.7';
-const ENTERPRISE_VERSION = '0.4.4';
+const ENTERPRISE_VERSION = '2026.11.1';
 const OSS_CRDS_OCI = 'oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds';
 const OSS_CONTROLLER_OCI = 'oci://ghcr.io/kagent-dev/kagent/helm/kagent';
 const ENT_CRDS_OCI =
@@ -14,18 +14,26 @@ const ENT_CONTROLLER_OCI =
   'oci://us-docker.pkg.dev/solo-public/kagent-enterprise-helm/charts/kagent-enterprise';
 
 // Agent Substrate defaults -- keep in sync with addons/kagent/index.js
-const SUBSTRATE_VERSION = '1.0.0-rc.1-76ace06f';
+const SUBSTRATE_VERSION = '1.0.0-ff3be686';
 const SUBSTRATE_OCI = 'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate';
 const SUBSTRATE_CRDS_OCI =
   'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-crds';
 const SUBSTRATE_PODCERT_OCI =
   'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-podcert';
+// Split out of the main substrate chart as of substrate 1.0.0 GA -- keep in sync with
+// addons/kagent/index.js's SUBSTRATE_ATELET_RELEASE.
+const SUBSTRATE_ATELET_OCI =
+  'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-atelet';
+const RUSTFS_CREDENTIALS_SECRET = 'kagent-rustfs-credentials';
+const RUSTFS_DEFAULT_CREDENTIAL = 'rustfsadmin';
 const SUBSTRATE_WORKER_IMAGE_REGISTRY = 'us-docker.pkg.dev/solo-public/substrate-enterprise';
 const SUBSTRATE_NAMESPACE = 'ate-system';
 const PODCERT_NAMESPACE = 'podcertificate-controller-system';
-// GitHub release tag format (v1.0.0-rc1), which differs from the Helm chart's own OCI
-// version string (SUBSTRATE_VERSION, e.g. 1.0.0-rc.1-76ace06f) even for the same release.
-const KUBECTL_ATE_VERSION = 'v1.0.0-rc1';
+// GitHub release tag format (v1.0.0), which differs from the Helm chart's own OCI
+// version string (SUBSTRATE_VERSION, e.g. 1.0.0-ff3be686) even for the same release.
+const KUBECTL_ATE_VERSION = 'v1.0.0';
+// Keep in sync with addons/kagent/index.js's SUBSTRATE_PREVIEW_GATES.
+const SUBSTRATE_PREVIEW_GATES = ['PerTemplateSnapshotLocation', 'GoldenEgressPolicy'];
 
 // Keep in sync with addons/kagent/index.js's ANNOTATION_KEY_TO_STORAGE_BACKEND.
 const ANNOTATION_KEY_TO_STORAGE_BACKEND = {
@@ -40,6 +48,7 @@ const RBAC_CATALOG_RESOURCES = [
   'harnesses',
   'model-configs',
   'runtimes',
+  'egress-policies',
 ];
 
 export function envVarsFor(addonCfg, _clusterName) {
@@ -121,7 +130,9 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   const version =
     resolveRunbookTemplates(addonCfg.version, { env }) ||
     (enterprise ? ENTERPRISE_VERSION : OSS_VERSION);
-  const isAlphaChart = enterprise && /^1\./.test(version);
+  // Keep in sync with addons/kagent/index.js's isAlphaChart gate -- the chart switched from
+  // semver to CalVer at 2026.11.0, so `^1\.` alone no longer covers the current version line.
+  const isAlphaChart = enterprise && /^1\.\d|^\d{4}\./.test(version);
 
   const oidc = cfg.oidc || {};
   const keycloakHostname =
@@ -356,13 +367,19 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
       'global:',
       '  licensing:',
       '    licenseKey: "$ENTERPRISE_AGENTGATEWAY_LICENSE"',
-      // Required as of substrate 1.0.0-rc1: ActorTemplate.snapshotConfig.storageLocation (set
-      // per-Harness by the substrate-agent feature's own snapshots.bucket config) is now
-      // rejected with "Forbidden" unless this preview gate is explicitly enabled -- confirmed
-      // live, silently accepted with no gate at all on the prior alpha12/0.6.0 line. Applies
-      // cluster-wide to ate-api-server, ate-controller, and atelet.
+      // PerTemplateSnapshotLocation: per-Harness snapshotConfig.storageLocation is otherwise
+      // rejected (Forbidden). GoldenEgressPolicy: required as of kagent v1.0.0-rc3/substrate
+      // 1.0.0 GA, or golden egress policies are rejected. Must match the substrate-atelet
+      // release's own preview gates below.
       'preview:',
-      '  - PerTemplateSnapshotLocation',
+      ...SUBSTRATE_PREVIEW_GATES.map(gate => `  - ${gate}`),
+      // Deprecated by the chart itself as of substrate 1.0.0 GA -- the substrate-atelet step
+      // below installs the split-out chart instead. storageBackend here merges into the same
+      // key rather than pushing a second top-level `atelet:` block later, which would either
+      // silently win over (re-enabling the deprecated bundled path) or duplicate-key-fail.
+      'atelet:',
+      '  enabled: false',
+      ...(substrateSnapshotBackend === 'gcs' ? ['  storageBackend: gcs'] : []),
       'credentialProvider:',
       '  namespacePolicies:',
       '    - atespace: $KAGENT_NAMESPACE',
@@ -399,9 +416,6 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
         '  traces:',
         '    enabled: true'
       );
-    }
-    if (substrateSnapshotBackend === 'gcs') {
-      substrateValuesLines.push('atelet:', '  storageBackend: gcs', '  gcpAuthForImagePulls: true');
     }
 
     substrateBlock = `**Step ${substrateStep} - Install Agent Substrate:**
@@ -594,6 +608,58 @@ helm upgrade --install substrate \\
   --create-namespace \\
   --wait=false \\
   -f substrate-values.yaml \\
+  --kube-context ${ctx}
+\`\`\`
+
+Install the standalone Agent Substrate Atelet release -- split out of the main substrate chart as
+of substrate 1.0.0 GA (the main chart's own \`atelet.enabled\` is deprecated-but-still-true-by-
+default; new installs set it false, as above, and run this chart instead). Must come after
+substrate's first pass above (needs its "atelet" ServiceAccount name) and before the workload-
+identity annotation below. RustFS's bundled \`accessKey\`/\`secretKey\` are a fixed chart default
+(\`${RUSTFS_DEFAULT_CREDENTIAL}\`/\`${RUSTFS_DEFAULT_CREDENTIAL}\`), not generated per install, so this
+secret can be created directly rather than read back from a live release:
+
+\`\`\`bash
+${
+  substrateSnapshotBackend === 'gcs'
+    ? ''
+    : `kubectl --context ${ctx} create secret generic ${RUSTFS_CREDENTIALS_SECRET} -n $SUBSTRATE_NAMESPACE \\
+  --from-literal=AWS_ACCESS_KEY_ID=${RUSTFS_DEFAULT_CREDENTIAL} \\
+  --from-literal=AWS_SECRET_ACCESS_KEY=${RUSTFS_DEFAULT_CREDENTIAL} \\
+  --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+
+`
+}cat > substrate-atelet-values.yaml <<'EOF'
+preview:
+${SUBSTRATE_PREVIEW_GATES.map(gate => `  - ${gate}`).join('\n')}
+objectStore:
+${
+  substrateSnapshotBackend === 'gcs'
+    ? '  backend: gcs'
+    : `  backend: s3
+  endpoint: http://rustfs.$SUBSTRATE_NAMESPACE.svc:9000
+  region: us-east-1
+  pathStyle: true
+  credentialsSecret: ${RUSTFS_CREDENTIALS_SECRET}`
+}
+${
+  otlpEndpoint
+    ? // This chart's own otel.endpoint applies to every signal unless a signal sets its own --
+      // its default otherwise points metrics/logs at a collector hostname this repo never
+      // deploys, with traces off entirely. Mirrors the main substrate release's own otel values.
+      `otel:
+  endpoint: "${otlpEndpoint}"
+  traces:
+    enabled: true
+`
+    : ''
+}EOF
+
+helm upgrade --install substrate-atelet \\
+  ${SUBSTRATE_ATELET_OCI} \\
+  --namespace $SUBSTRATE_NAMESPACE \\
+  --version $SUBSTRATE_VERSION \\
+  -f substrate-atelet-values.yaml \\
   --kube-context ${ctx}
 \`\`\`
 ${
@@ -960,7 +1026,9 @@ export function cleanup(addonCfg, clusterName) {
   const cfg = addonCfg.config || {};
   const enterprise = cfg.enterprise === true;
   const version = addonCfg.version || (enterprise ? ENTERPRISE_VERSION : OSS_VERSION);
-  const isAlphaChart = enterprise && /^1\./.test(version);
+  // Keep in sync with addons/kagent/index.js's isAlphaChart gate -- the chart switched from
+  // semver to CalVer at 2026.11.0, so `^1\.` alone no longer covers the current version line.
+  const isAlphaChart = enterprise && /^1\.\d|^\d{4}\./.test(version);
   const oidc = cfg.oidc || {};
   const hostname = cfg.hostname || null;
   const tlsSecretName = (cfg.tls || {}).secretName || 'kagent-ui-tls';
@@ -1005,12 +1073,13 @@ export function cleanup(addonCfg, clusterName) {
       `# Delete chart-bundled SandboxConfigs first -- only ate-controller clears their finalizer,\n` +
       `# and the chart uninstall below gives no ordering guarantee between it and the CR.\n` +
       `kubectl delete sandboxconfigs.ate.dev gvisor-default --context ${ctx} --ignore-not-found --timeout=60s\n` +
+      `helm uninstall substrate-atelet -n ${substrateNs} --kube-context ${ctx}\n` +
       `helm uninstall substrate -n ${substrateNs} --kube-context ${ctx}\n` +
       `helm uninstall substrate-crds -n ${substrateNs} --kube-context ${ctx}\n` +
       `helm uninstall substrate-podcert -n ${PODCERT_NAMESPACE} --kube-context ${ctx}\n` +
       `kubectl delete namespace ${substrateNs} --context ${ctx} --ignore-not-found\n` +
       `kubectl delete namespace ${PODCERT_NAMESPACE} --context ${ctx} --ignore-not-found\n` +
-      `rm -f substrate-values.yaml actor-id-ca.crt kubectl-ate\n`
+      `rm -f substrate-values.yaml substrate-atelet-values.yaml actor-id-ca.crt kubectl-ate\n`
     : '';
 
   return `\`\`\`bash

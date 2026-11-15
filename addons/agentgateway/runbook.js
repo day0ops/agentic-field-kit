@@ -178,6 +178,7 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
               `  --set-json 'ui.rbac.roleMapping.roleMappings=${JSON.stringify(ui.oidc.roleMappings)}'`,
             ]
           : []),
+        ...(ui.costManagement ? [`  --set ui.features.costManagement=true`] : []),
       ]
     : [];
 
@@ -274,12 +275,18 @@ EOF
           from: ${gwFrom}`
     : '';
 
-  // Telemetry policies — applied only when a local OTel traces collector is configured
+  // Telemetry policies — applied only when a local OTel traces collector is configured.
+  // telemetryGatewayName/Namespace override the shared gateway above (gwName/gwNs) --
+  // profiles where each feature owns its own Gateway point this at the one that
+  // actually carries the traffic worth tracing, not whichever gateway this addon itself
+  // happens to create.
+  const telemetryGwName = cfg.telemetryGatewayName || gwName;
+  const telemetryGwNs = cfg.telemetryGatewayNamespace || gwNs;
   const telemetryPoliciesBlock =
-    tracesCollectorName && soloUiNs
+    tracesCollectorName && (soloUiNs || cfg.ui?.enabled)
       ? `
 
-Apply OTel telemetry policies (tracing + access log) for the \`${gwName}\` gateway:
+Apply OTel telemetry policies (tracing + access log) for the \`${telemetryGwName}\` gateway:
 
 \`\`\`bash
 # Tracing policy — sends spans to the local OTel traces collector
@@ -288,12 +295,12 @@ apiVersion: enterpriseagentgateway.solo.io/v1alpha1
 kind: EnterpriseAgentgatewayPolicy
 metadata:
   name: otel-tracing-policy
-  namespace: ${gwNs}
+  namespace: ${telemetryGwNs}
 spec:
   targetRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-      name: ${gwName}
+      name: ${telemetryGwName}
   frontend:
     tracing:
       backendRef:
@@ -314,12 +321,12 @@ apiVersion: enterpriseagentgateway.solo.io/v1alpha1
 kind: EnterpriseAgentgatewayPolicy
 metadata:
   name: otel-access-log-policy
-  namespace: ${gwNs}
+  namespace: ${telemetryGwNs}
 spec:
   targetRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-      name: ${gwName}
+      name: ${telemetryGwName}
   frontend:
     accessLog:
       otlp:

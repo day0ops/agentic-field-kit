@@ -1,12 +1,14 @@
 {
   "name": "agentic-field-kit",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Agentic Field Kit - provision, install, and demo agentic AI workloads on Istio Ambient Mesh",
   "type": "module",
   "main": "src/cli.js",
   "bin": {
     "agentic": "./src/cli.js"
   },
+  "author": "",
+  "license": "Apache-2.0",
   "scripts": {
     "test": "bun test",
     "format": "prettier --write .",

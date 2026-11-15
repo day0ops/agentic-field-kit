@@ -41,6 +41,19 @@ describe('kagent-rbac-policy', () => {
     ]);
   });
 
+  it('allows the egress-policies catalog resource (kagent 2026.11.1+)', () => {
+    const f2 = new KagentRbacPolicyFeature('kagent-rbac-policy', {
+      policyName: 'egress-viewers',
+      namespace: 'kagent-system',
+      groups: ['operators'],
+      grants: [{ resource: 'egress-policies', accessLevel: 'view' }],
+    });
+    expect(f2.validate()).toBe(true);
+    expect(f2.buildPolicy().spec.grants).toEqual([
+      { name: 'view-egress-policies', resource: 'kagent:egress-policies', accessLevel: 'view' },
+    ]);
+  });
+
   it('allows a wildcard resource grant', () => {
     const wildcard = new KagentRbacPolicyFeature('kagent-rbac-policy', {
       policyName: 'admins',

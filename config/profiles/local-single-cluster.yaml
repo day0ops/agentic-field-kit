@@ -1,7 +1,7 @@
 apiVersion: agentic.demo/v1
 kind: Profile
 metadata:
-  name: local-single-cluster-with-kagent-substrate
+  name: local-single-cluster
   description: |
     Single bring-your-own Kubernetes cluster with kagent Enterprise + Agent Substrate.
     - keycloak OIDC login
@@ -203,6 +203,17 @@ spec:
           enabled: true
           issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
           jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+        # agora-console-https carries the actual demo traffic (API/MCP/A2A) - the gateway
+        # worth tracing, unlike this addon's own UI gateway or Grafana's. Owned by the
+        # agora-console usecase feature, deployed after this addon; Gateway API policies
+        # tolerate a not-yet-existing target and attach once it appears.
+        telemetryGatewayName: agora-console-https
+        telemetryGatewayNamespace: kagent-system
+        tracesCollectorName: enterprise-agentgateway-ui-telemetry-collector
+        tracesCollectorNamespace: agentgateway-system
+        # Same collector handles both signals - the addon's own default
+        # (opentelemetry-collector-logs) doesn't exist in this profile's architecture.
+        logsCollectorName: enterprise-agentgateway-ui-telemetry-collector
         ui:
           enabled: true
           hostname: '{{env.domains.core.agentgatewayUi}}'
@@ -215,6 +226,8 @@ spec:
               kagent-admins: global.Admin
               kagent-writers: global.Writer
               kagent-readers: global.Reader
+          # Off by default upstream (unoptimized ClickHouse reads) - opting in for this demo.
+          costManagement: true
 
     - name: kagent
       description: Solo Enterprise for kagent AI agent platform + Agent Substrate

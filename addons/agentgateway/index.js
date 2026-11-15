@@ -33,6 +33,7 @@ export class AgentgatewayFeature extends AddonFeature {
     this.telemetryGatewayName = config.telemetryGatewayName || config.gateway?.name || null;
     this.telemetryGatewayNamespace =
       config.telemetryGatewayNamespace || config.gateway?.namespace || this.namespace;
+    this.logsCollectorName = config.logsCollectorName || null;
     this.ambientEnabled = config.ambientEnabled === true;
     // Whether an Istio mesh is installed on this profile -- mesh-less "addon-only"
     // profiles never register the Telemetry CRD, so mesh-tracing cleanup must be skipped.
@@ -66,6 +67,7 @@ export class AgentgatewayFeature extends AddonFeature {
           oidcIssuer: config.ui.oidc?.issuer,
           backendClientSecret: config.ui.oidc?.backendClientSecret,
           roleMappings: config.ui.oidc?.roleMappings || null,
+          costManagement: config.ui.costManagement === true,
         }
       : null;
     // Enables the controller's token-exchange/elicitation STS (chart default: disabled).
@@ -211,7 +213,7 @@ export class AgentgatewayFeature extends AddonFeature {
       await this.createGatewayResource(gatewayClassName);
     }
 
-    if (this.telemetryGatewayName && this.soloUiNamespace) {
+    if (this.telemetryGatewayName && (this.soloUiNamespace || this.ui)) {
       if (this.enterprise) {
         await this.applyTelemetryPolicies();
       } else {
@@ -374,6 +376,11 @@ export class AgentgatewayFeature extends AddonFeature {
         '--set-json',
         `ui.rbac.roleMapping.roleMappings=${JSON.stringify(this.ui.roleMappings)}`
       );
+    }
+    // Chart default is false -- the Cost Management UI's ClickHouse reads are
+    // unoptimized, so it's opt-in rather than on by default.
+    if (this.ui.costManagement) {
+      args.push('--set', 'ui.features.costManagement=true');
     }
     return args;
   }
@@ -770,7 +777,7 @@ export class AgentgatewayFeature extends AddonFeature {
       }
     }
 
-    if (this.telemetryGatewayName && this.soloUiNamespace && this.enterprise) {
+    if (this.telemetryGatewayName && (this.soloUiNamespace || this.ui) && this.enterprise) {
       const gatewayNs = this.telemetryGatewayNamespace;
       for (const name of ['otel-tracing-policy', 'otel-access-log-policy']) {
         await this.deleteResource(

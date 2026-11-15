@@ -10,6 +10,7 @@ const RBAC_CATALOG_RESOURCES = [
   'harnesses',
   'model-configs',
   'runtimes',
+  'egress-policies',
 ];
 
 // Resources outside the addon's own catalog list but still real EnterpriseKagentRBACPolicy
