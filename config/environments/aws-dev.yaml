@@ -46,14 +46,14 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.3
+    version: v2026.10.1
 
   kagent:
     scheme: https
-    version: 0.5.6
+    version: 2026.11.1
 
   substrate:
-    version: 1.0.0-alpha5
+    version: 1.0.0-ff3be686
 
   soloUi:
     version: 0.5.6
@@ -84,6 +84,11 @@ spec:
       repoMcpClientId: e32b61f8-6801-4d3d-993e-882252ca06cd
 
   images:
+    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...). Must track
+    # kagent.version's release line -- a stale digest fails ActorTemplate's /config
+    # materialization. As of 2026.11.1 this is Solo's own build (resolved from the release's
+    # release-manifest.json asset, not GHCR's upstream OSS tags).
+    kagentHarness: us-docker.pkg.dev/solo-public/kagent-enterprise/golang-adk@sha256:2eb012033e979f08ce33567e45802f2e0988ccd369b2e89114885bd0d7bb85b6
     finflow:
       marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.0
       newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.0

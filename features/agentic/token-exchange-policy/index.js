@@ -62,6 +62,14 @@ import { CommandRunner } from '../../../src/lib/common.js';
  *                                      // we create those Backends ourselves), and applied via a
  *                                      // separate policy object in `namespace` since Backend-kind
  *                                      // targetRefs must live in the same namespace as the policy.
+ *   extraJwtHTTPRoutes: string[],     // Optional — additional HTTPRoute names (e.g. from
+ *                                      // substrate-a2a-route, '<agentName>-a2a') that need JWT
+ *                                      // enforcement but share a single staticBackendNames
+ *                                      // Backend for the exchange leg rather than one per route —
+ *                                      // a2aAgentNames couples both (one Backend named
+ *                                      // '<name>-a2a' per route); this field only adds to the JWT
+ *                                      // policy's targetRefs, independently of staticBackendNames/
+ *                                      // mcpServerNames.
  *   jwtIssuer: string,                // Required — issuer of the INCOMING JWT the JWT auth
  *                                      // policy validates, e.g. https://<keycloak>/realms/<realm>
  *                                      // for same-realm exchange, or an external IdP's issuer
@@ -142,6 +150,7 @@ export class TokenExchangePolicyFeature extends Feature {
     // the 'order-lookup-a2a' EnterpriseAgentgatewayBackend it creates. Optional: the
     // exchange applies to MCP backends alone if this is left empty.
     this.a2aAgentNames = config.a2aAgentNames || [];
+    this.extraJwtHTTPRoutes = config.extraJwtHTTPRoutes || [];
     this.jwtIssuer = config.jwtIssuer;
     this.jwtAudiences = config.jwtAudiences || [];
     // Keycloak's own issuer, used only for the exchange leg's BackendTLSPolicy hostname
@@ -239,6 +248,11 @@ export class TokenExchangePolicyFeature extends Feature {
             group: 'gateway.networking.k8s.io',
             kind: 'HTTPRoute',
             name: `${agentName}-a2a`,
+          })),
+          ...this.extraJwtHTTPRoutes.map(routeName => ({
+            group: 'gateway.networking.k8s.io',
+            kind: 'HTTPRoute',
+            name: routeName,
           })),
         ],
         traffic: {

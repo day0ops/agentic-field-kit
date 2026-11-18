@@ -5,26 +5,28 @@ const DIGEST_PIN_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/;
 /**
  * SubstrateAgentFeature
  *
- * Applies a kagent `Harness` + one or more `AgentTemplate`s (kagent.dev/v1alpha3,
- * kagent 1.0.0-alpha5's architecture generation) that run as Actors on Agent
- * Substrate. Assumes the kagent addon already created and owns `namespace` --
- * this feature does not create or Ambient-label it.
+ * Applies a kagent `Harness` + one `AgentTemplate` + one `Agent` per swarm
+ * entry (api.kagent.dev/v1alpha3, kagent 1.0.0-alpha12's architecture
+ * generation) that run as Actors on Agent Substrate. Assumes the kagent addon
+ * already created and owns `namespace` -- this feature does not create or
+ * Ambient-label it.
  *
- * This generation has no `Agent` CRD: a Harness admits AgentTemplates via
- * `spec.allowedAgentTemplates.selector`, a label selector matched against
- * each AgentTemplate's own labels, rather than a separate resource pairing
- * one specific template to one specific Harness. Invocation (choosing which
- * admitted template actually runs) happens at call time via the gRPC
- * `CreateAgentInstance(Harness, AgentTemplate)` API -- the caller names both
- * explicitly, so there's no persistent "entry point" resource here. See
- * features/agentic/fraud-ops-console for a caller that does this, driven by
- * its own `FRAUD_SWARM_HARNESS`/`FRAUD_LEAD_AGENT_TEMPLATE` env vars.
+ * This generation has no Harness-level allow-list: a prior generation
+ * (1.0.0-alpha5) admitted any AgentTemplate matching
+ * `Harness.spec.allowedAgentTemplates.selector`, a label selector; that field
+ * was removed in alpha12. Each AgentTemplate is now explicitly paired to a
+ * Harness via a separate `Agent` CRD (`spec.harnessRef` + `spec.template.ref`)
+ * -- this feature creates one `Agent` per swarm entry, named after its
+ * AgentTemplate, so invocation (`CreateAgentInstance`) has a real pairing
+ * resource to resolve against instead of a selector match. See
+ * features/agentic/fraud-ops-console for a caller driven by its own
+ * `FRAUD_SWARM_HARNESS`/`FRAUD_LEAD_AGENT_TEMPLATE` env vars.
  *
  * Backward-compatible: with no `agents` list it builds a single AgentTemplate
- * named after `config.name` (the original single-agent behavior). With an
- * `agents` list it builds one AgentTemplate per entry, all sharing one
- * Harness + WorkerPool -- the swarm case, where entries can bind each other
- * as tools (sub-agent delegation) and/or bind MCP servers.
+ * (+ matching Agent) named after `config.name` (the original single-agent
+ * behavior). With an `agents` list it builds one AgentTemplate + one Agent per
+ * entry, all sharing one Harness + WorkerPool -- the swarm case, where entries
+ * can bind each other as tools (sub-agent delegation) and/or bind MCP servers.
  *
  * `Harness.spec.workload.image` must be a real, digest-pinned image `ate-api`
  * can pull (CRD-enforced pattern name@sha256:<64 hex>); if it can't, the golden
@@ -47,7 +49,9 @@ const DIGEST_PIN_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/;
  *   workerPoolName: string,     // Default: 'kagent-default'
  *   workerImage: string,        // Optional -- if set, this feature also creates its own WorkerPool named workerPoolName
  *   workerPoolReplicas: number, // Default: 1 (only used when workerImage is set)
- *   sandboxClass: string,       // Default: 'gvisor' (only used when workerImage is set)
+ *   sandboxClass: string,       // Default: 'gvisor' (only used when workerImage is set) -- built into
+ *                                // WorkerPool.spec.sandboxClasses (a single-entry list; the CRD itself
+ *                                // supports more than one, this feature only ever needs one)
  *   snapshots: {                 // Harness snapshotPolicy.location. Both this and the kagent addon's
  *                                 // own substrate.snapshots should read the same infra-provisioned
  *                                 // value, so a Harness's snapshot location always agrees with the
@@ -75,8 +79,8 @@ const DIGEST_PIN_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/;
  *   },
  *   description: string,      // AgentTemplate description (single-agent mode)
  *   systemPrompt: string,     // AgentTemplate system prompt (single-agent mode)
- *   agents: [{                // Swarm mode: one AgentTemplate per entry, all admitted onto the
- *                               // same Harness. By convention agents[0] is the entry point a
+ *   agents: [{                // Swarm mode: one AgentTemplate + one Agent per entry, all admitted onto
+ *                               // the same Harness. By convention agents[0] is the entry point a
  *                               // caller names in CreateAgentInstance; agents[1:] are specialists
  *                               // only reachable via another agent's `agent` tool binding -- there
  *                               // is no CRD-level distinction between them in this architecture.
@@ -85,7 +89,7 @@ const DIGEST_PIN_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/;
  *     systemPrompt: string,
  *     modelConfigRef: string, // Default: config.modelConfigRef
  *     tools: [
- *       { agent: string, description: string }, // delegate to another agent in this list (-> CRD's agent tool)
+ *       { agent: string, description: string }, // delegate to another agent in this list (-> CRD's subAgent tool)
  *       { mcp: string, tools: string[] }, // bind a RemoteMCPServer named `mcp`; `tools` optionally limits exposed tools
  *     ],
  *   }],
@@ -166,40 +170,41 @@ export class SubstrateAgentFeature extends Feature {
     return true;
   }
 
-  // buildWorkerPool returns a dedicated WorkerPool CR (ate.dev/v1alpha1) when
-  // workerImage is set, or undefined when it isn't -- backward-compatible
-  // with the original single-agent usage, which relies on the kagent addon's
-  // own Helm-templated `kagent-default` WorkerPool already existing. A custom
-  // workerPoolName (e.g. a swarm's own small pool) is never auto-created by
-  // anything else, so callers wanting one must supply workerImage.
+  // Returns a dedicated WorkerPool CR (ate.dev/v1) when workerImage is set, undefined
+  // otherwise -- backward-compatible with relying on the kagent addon's own
+  // `kagent-default` pool. A custom workerPoolName is never auto-created elsewhere, so
+  // callers wanting one must supply workerImage.
   //
-  // The `kagent.dev/worker-pool: <name>` label mirrors the kagent-enterprise
-  // Helm chart's own WorkerPool template exactly (charts/kagent-enterprise/
-  // templates/substrate-workerpool.yaml) -- kagent's own chart-created pools
-  // (e.g. kagent-default) always carry it. ate-api's scheduler filters
-  // candidate workers by the ActorTemplate's worker label selector
-  // (scheduling.Applies), so a WorkerPool missing whatever label that
-  // selector requires produces workers that read as healthy/FREE individually
-  // but are never eligible -- live-confirmed (2026-09-28) as
-  // ResourceExhausted: "no free workers available" on every resume attempt,
-  // regardless of replica count.
+  // The kagent.dev/worker-pool-name + -namespace labels must match the chart's own
+  // WorkerPool metadata exactly -- every compiled ActorTemplate's worker_selector
+  // requires this pair, and a mismatch leaves every worker ineligible (confirmed live).
   buildWorkerPool() {
     if (!this.workerImage) return undefined;
     return {
-      apiVersion: 'ate.dev/v1alpha1',
+      apiVersion: 'ate.dev/v1',
       kind: 'WorkerPool',
       metadata: {
         name: this.workerPoolName,
         namespace: this.namespace,
         labels: {
           'app.kubernetes.io/managed-by': 'agentic-demo',
-          'kagent.dev/worker-pool': this.workerPoolName,
+          'kagent.dev/worker-pool-name': this.workerPoolName,
+          'kagent.dev/worker-pool-namespace': this.namespace,
         },
       },
       spec: {
         replicas: this.workerPoolReplicas,
-        sandboxClass: this.sandboxClass,
+        sandboxClasses: [{ name: this.sandboxClass }],
         workerImage: this.workerImage,
+        // Worker capacity is reported via its own resources.limits -- an unset budget
+        // reports zero room. Sized just above kagent-controller's per-actor default
+        // (1 CPU / 1Gi) so each worker can host exactly one actor at a time.
+        template: {
+          resources: {
+            requests: { cpu: '1100m', memory: '1280Mi' },
+            limits: { cpu: '1500m', memory: '1536Mi' },
+          },
+        },
       },
     };
   }
@@ -212,7 +217,7 @@ export class SubstrateAgentFeature extends Feature {
   buildModelConfig() {
     if (!this.modelConfig) return undefined;
     return {
-      apiVersion: 'kagent.dev/v1alpha3',
+      apiVersion: 'api.kagent.dev/v1alpha3',
       kind: 'ModelConfig',
       metadata: {
         name: this.modelConfigName,
@@ -233,7 +238,7 @@ export class SubstrateAgentFeature extends Feature {
 
   buildHarness() {
     return {
-      apiVersion: 'kagent.dev/v1alpha3',
+      apiVersion: 'api.kagent.dev/v1alpha3',
       kind: 'Harness',
       metadata: {
         name: this.harnessName,
@@ -247,12 +252,6 @@ export class SubstrateAgentFeature extends Feature {
           workerPoolRef: { name: this.workerPoolName },
           snapshotPolicy: { location: this.snapshotLocation },
         },
-        // No Agent CRD in this architecture generation: a Harness admits whichever
-        // AgentTemplates match this selector, rather than being paired to one specific
-        // template. Matches the 'kagent.dev/harness' label every AgentTemplate below carries.
-        allowedAgentTemplates: {
-          selector: { matchLabels: { 'kagent.dev/harness': this.harnessName } },
-        },
       },
     };
   }
@@ -262,11 +261,10 @@ export class SubstrateAgentFeature extends Feature {
     return tools.map(t => {
       if (t.agent) {
         return {
-          agent: {
+          subAgent: {
             name: t.agent,
             description: t.description || `Delegate to ${t.agent}`,
             templateRef: { name: t.agent },
-            isolation: 'Shared',
           },
         };
       }
@@ -274,10 +272,10 @@ export class SubstrateAgentFeature extends Feature {
         mcp: {
           // Live-confirmed CEL validation on AgentTemplate.spec.tools[].mcp.server:
           // kind must equal 'RemoteMCPServer' and apiGroup must be entirely absent
-          // (not even empty string) -- binding a kagent.dev/v1alpha1 MCPServer
+          // (not even empty string) -- binding a kagent-native MCPServer object
           // directly is rejected at admission. Point this at a RemoteMCPServer
-          // that fronts the actual MCP server (e.g. kagent-mcp-server now creates
-          // one automatically alongside its MCPServer).
+          // that fronts the actual MCP server (kagent-mcp-server creates one
+          // alongside its own Deployment/Service).
           server: {
             kind: 'RemoteMCPServer',
             name: t.mcp,
@@ -298,11 +296,16 @@ export class SubstrateAgentFeature extends Feature {
       };
       if (tools) spec.tools = tools;
       return {
-        apiVersion: 'kagent.dev/v1alpha3',
+        apiVersion: 'api.kagent.dev/v1alpha3',
         kind: 'AgentTemplate',
         metadata: {
           name: a.name,
           namespace: this.namespace,
+          // 'kagent.dev/harness' is grouping/inspection only at this CRD generation --
+          // the Harness<->AgentTemplate pairing it used to drive (via
+          // Harness.spec.allowedAgentTemplates.selector) was replaced by the explicit
+          // Agent CRD built in buildAgents(). Kept for `kubectl get agenttemplates -l
+          // kagent.dev/harness=<name>` convenience.
           labels: {
             'app.kubernetes.io/managed-by': 'agentic-demo',
             'kagent.dev/harness': this.harnessName,
@@ -313,6 +316,29 @@ export class SubstrateAgentFeature extends Feature {
     });
   }
 
+  // buildAgents returns one Agent CR (api.kagent.dev/v1alpha3) per swarm
+  // entry, pairing it to this Harness and its same-named AgentTemplate.
+  // Introduced at kagent v1.0.0-alpha12: the prior architecture generation
+  // admitted any AgentTemplate matching
+  // Harness.spec.allowedAgentTemplates.selector (a label selector, removed in
+  // this version); invocation now requires this explicit per-agent pairing
+  // resource instead.
+  buildAgents() {
+    return this.agents.map(a => ({
+      apiVersion: 'api.kagent.dev/v1alpha3',
+      kind: 'Agent',
+      metadata: {
+        name: a.name,
+        namespace: this.namespace,
+        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo' },
+      },
+      spec: {
+        template: { ref: { name: a.name } },
+        harnessRef: { name: this.harnessName },
+      },
+    }));
+  }
+
   async deploy() {
     const modelConfig = this.buildModelConfig();
     if (modelConfig) {
@@ -320,19 +346,49 @@ export class SubstrateAgentFeature extends Feature {
     }
     const workerPool = this.buildWorkerPool();
     if (workerPool) {
+      // atelet (the per-node sandbox agent) runs this pool's worker pods with hostPath
+      // volumes, AppArmor unconfined, and root -- any enforcing "baseline"/"restricted"
+      // PodSecurity default on this namespace silently blocks the WorkerPool controller
+      // from ever creating them ("would violate PodSecurity restricted:latest", confirmed
+      // live, 2026-10-31), which just leaves the Agent stuck on ActorTemplatePending
+      // forever with no further error. The kagent addon only relaxes this for its own
+      // ate-system namespace -- this feature's own dedicated WorkerPool can land in any
+      // namespace a use case configures (here, kagent-system), so it must ensure its own.
+      await this.applyResource({
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: {
+          name: this.namespace,
+          labels: {
+            'pod-security.kubernetes.io/enforce': 'privileged',
+            'pod-security.kubernetes.io/audit': 'privileged',
+            'pod-security.kubernetes.io/warn': 'privileged',
+          },
+        },
+      });
       await this.applyResource(workerPool);
     }
     await this.applyResource(this.buildHarness());
     for (const tpl of this.buildAgentTemplates()) {
       await this.applyResource(tpl);
     }
+    for (const agent of this.buildAgents()) {
+      await this.applyResource(agent);
+    }
     this.log(
-      `Harness '${this.harnessName}' + ${this.agents.length} AgentTemplate(s) applied in '${this.namespace}'`,
+      `Harness '${this.harnessName}' + ${this.agents.length} AgentTemplate(s)/Agent(s) applied in '${this.namespace}'`,
       'success'
     );
   }
 
   async cleanup() {
+    for (const a of this.agents) {
+      // Fully-qualified: a bare 'Agent' is ambiguous on any cluster that also runs
+      // AgentRegistry, which has its own unrelated ar.dev/v1alpha1 Agent kind --
+      // kubectl's discovery could resolve the bare name to that one instead and
+      // silently no-op (caught by --ignore-not-found), orphaning this Agent CR.
+      await this.deleteResource('agents.api.kagent.dev', a.name, this.namespace);
+    }
     for (const a of this.agents) {
       await this.deleteResource('AgentTemplate', a.name, this.namespace);
     }

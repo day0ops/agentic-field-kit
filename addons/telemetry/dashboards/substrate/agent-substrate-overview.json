@@ -1,0 +1,441 @@
+{
+  "uid": "agent-substrate-overview",
+  "title": "Agent Substrate Overview",
+  "tags": ["substrate", "kagent"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 100,
+      "title": "Control Plane Health",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "title": "Worker Pool Ready vs Desired Workers",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ate_workerpool_ready_workers",
+          "legendFormat": "{{ate_workerpool_name}} ready"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ate_workerpool_desired_workers",
+          "legendFormat": "{{ate_workerpool_name}} desired"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Worker Pool State Breakdown",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Averaged across ate-api-server replicas first, then summed by state, to avoid overcounting the same worker reported by each replica.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(avg(ate_workerpool_workers) by (ate_workerpool_name, ate_worker_state, exported_instance)) by (ate_workerpool_name, ate_worker_state)",
+          "legendFormat": "{{ate_workerpool_name}} {{ate_worker_state}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "ate-api-server RPC Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(rpc_server_call_duration_seconds_bucket{service_name=\"ateapi\"}[5m])) by (le, rpc_method))",
+          "legendFormat": "p50 {{rpc_method}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(rpc_server_call_duration_seconds_bucket{service_name=\"ateapi\"}[5m])) by (le, rpc_method))",
+          "legendFormat": "p95 {{rpc_method}}"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(rpc_server_call_duration_seconds_bucket{service_name=\"ateapi\"}[5m])) by (le, rpc_method))",
+          "legendFormat": "p99 {{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "ate-api-server RPC Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] },
+      "description": "Target: >99.9% success rate (<0.1% error rate) per docs.solo.io's API Server Availability SLO.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(rpc_server_call_duration_seconds_count{service_name=\"ateapi\", rpc_response_status_code!=\"OK\"}[5m])) / sum(rate(rpc_server_call_duration_seconds_count{service_name=\"ateapi\"}[5m]))",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "title": "Actor Lifecycle & Scheduling",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "title": "Actor Lifecycle Operation Duration",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(ate_actor_lifecycle_operation_duration_seconds_bucket[5m])) by (le, ate_actor_operation_name))",
+          "legendFormat": "p50 {{ate_actor_operation_name}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(ate_actor_lifecycle_operation_duration_seconds_bucket[5m])) by (le, ate_actor_operation_name))",
+          "legendFormat": "p95 {{ate_actor_operation_name}}"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(ate_actor_lifecycle_operation_duration_seconds_bucket[5m])) by (le, ate_actor_operation_name))",
+          "legendFormat": "p99 {{ate_actor_operation_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Scheduler Assignment Duration by Outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "outcome=no_capacity rising indicates the worker pool is exhausted, not a scheduler slowdown.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(ate_scheduler_assignment_duration_seconds_bucket[5m])) by (le, ate_scheduler_outcome))",
+          "legendFormat": "p50 {{ate_scheduler_outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(ate_scheduler_assignment_duration_seconds_bucket[5m])) by (le, ate_scheduler_outcome))",
+          "legendFormat": "p95 {{ate_scheduler_outcome}}"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(ate_scheduler_assignment_duration_seconds_bucket[5m])) by (le, ate_scheduler_outcome))",
+          "legendFormat": "p99 {{ate_scheduler_outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Actor Crash Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(ate_actor_crashes_total[5m])) by (ate_template_name)",
+          "legendFormat": "{{ate_template_name}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Actor Checkpoint (Suspend) Duration",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "Slow suspends here point to atelet or snapshot upload delays, not the actor's own workload.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(ate_actor_checkpoint_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(ate_actor_checkpoint_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(ate_actor_checkpoint_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "title": "Snapshot & Cache Health",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 4,
+      "title": "Atelet Snapshot Size",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum(atelet_snapshot_size_bytes_bucket) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(atelet_snapshot_size_bytes_bucket) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(atelet_snapshot_size_bytes_bucket) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Snapshot Undurable Age (Max)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "Should not exceed atelet's --snapshot-upload-delay; growing age means the upload worker is falling behind.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "atelet_snapshot_undurable_age_max_seconds",
+          "legendFormat": "{{k8s_pod_name}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Snapshot Upload Overdue Actors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Healthy = 0 in every band. Actors in over_15m have only a local, non-durable snapshot.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "atelet_snapshot_upload_overdue_actors",
+          "legendFormat": "{{ate_snapshot_upload_overdue_band}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Image Cache Hit Ratio",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] },
+      "description": "<80% means actors are paying pull/unpack overhead on resume instead of hitting the local cache.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(ate_imagecache_requests_total{ate_imagecache_outcome=\"hit\"}[5m])) / sum(rate(ate_imagecache_requests_total{ate_imagecache_outcome=~\"hit|miss\"}[5m]))",
+          "legendFormat": "hit ratio"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "File Cache Size by Cache",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "description": "Compare against atelet's --sandbox-asset-cache-max-bytes / --snapshot-cache-max-bytes budgets. A flat line pinned at the budget indicates thrashing.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ate_filecache_size_bytes",
+          "legendFormat": "{{ate_filecache_name}}"
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "title": "Controller Health",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 59 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 15,
+      "title": "Reconciler Workqueue Depth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Sustained rise means ate-controller is falling behind on reconciliation.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "workqueue_depth",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Reconcile Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(controller_runtime_reconcile_errors_total[5m])) by (controller)",
+          "legendFormat": "{{controller}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Reconcile Duration",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 68 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(controller_runtime_reconcile_time_seconds_bucket[5m])) by (le, controller))",
+          "legendFormat": "p95 {{controller}}"
+        }
+      ]
+    },
+    {
+      "id": 104,
+      "title": "Resource Consumption",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 18,
+      "title": "CPU Usage by Substrate Component",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 77 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Cores used, via kubelet/cAdvisor. Covers ate-api-server, ate-controller, atelet, atenet, and Substrate worker pods.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"ate-system|kagent-system\", container!=\"\", container!=\"POD\", pod=~\"ate-api-server.*|ate-controller.*|atelet.*|atenet.*|.*-workers-.*|kagent-default.*\"}[5m])) by (pod)",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Memory Usage by Substrate Component",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 77 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(container_memory_working_set_bytes{namespace=~\"ate-system|kagent-system\", container!=\"\", container!=\"POD\", pod=~\"ate-api-server.*|ate-controller.*|atelet.*|atenet.*|.*-workers-.*|kagent-default.*\"}) by (pod)",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 105,
+      "title": "Traces",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 85 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "title": "Substrate Traces",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 86 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "table, not traces -- the native trace panel fails to render this Tempo version's nested span-detail frame even though the query returns valid data (confirmed via Query Inspector).",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "traceql",
+          "query": "{}",
+          "limit": 20
+        }
+      ]
+    }
+  ]
+}

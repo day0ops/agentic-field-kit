@@ -17,7 +17,7 @@ datasources:
     type: tempo
     uid: tempo
     access: proxy
-    url: http://tempo-query-frontend.{{TELEMETRY_NAMESPACE}}:3100
+    url: http://tempo-query-frontend.{{TELEMETRY_NAMESPACE}}:3200
     editable: true
     jsonData:
       tracesToLogsV2:

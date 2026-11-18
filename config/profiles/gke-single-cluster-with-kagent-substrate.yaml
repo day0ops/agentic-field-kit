@@ -1,9 +1,9 @@
 apiVersion: agentic.demo/v1
 kind: Profile
 metadata:
-  name: gke-single-cluster-mesh-with-kagent-substrate
+  name: gke-single-cluster-with-kagent-substrate
   description: |
-    Single GKE cluster ambient mesh with kagent Enterprise + Agent Substrate, keycloak OIDC login, and enterprise agentgateway fronting the UI over Google Cloud DNS + Let's Encrypt.
+    Single GKE cluster with kagent Enterprise + Agent Substrate (no Istio Ambient mesh), keycloak OIDC login, and enterprise agentgateway fronting the UI over Google Cloud DNS + Let's Encrypt.
 
 spec:
   infra: gke-single-cluster-substrate
@@ -38,7 +38,6 @@ spec:
       version: '{{env.agentgateway.version}}'
       config:
         enterprise: true
-        ambientEnabled: true
         tokenExchange:
           enabled: true
           issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
@@ -79,7 +78,10 @@ spec:
                 clientAttributes:
                   pkce.code.challenge.method: S256
                 groupMembership: true
-                audience: kagent-enterprise
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401, confirmed live.
+                audience: kagent-enterprise-api
                 redirectUris:
                   - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
               - clientId: fraud-swarm-driver
@@ -88,7 +90,10 @@ spec:
                 flows:
                   - service-account
                 groupMembership: true
-                audience: kagent-enterprise
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401, confirmed live.
+                audience: kagent-enterprise-api
                 serviceAccountGroup: kagent-writers
             users:
               - username: kagent-admin
@@ -134,14 +139,37 @@ spec:
         substrate:
           enabled: true
           version: '{{env.substrate.version}}'
+          registry: '{{env.substrate.registry}}'
+          kubectlAteVersion: '{{env.substrate.kubectlAteVersion}}'
           snapshots:
             identityAnnotation:
               key: '{{infra.clusters.demo.storage.identityAnnotationKey}}'
               value: '{{infra.clusters.demo.storage.identityAnnotationValue}}'
 
+    - name: telemetry
+      description: Grafana + Tempo observability for kagent + Agent Substrate (no Loki)
+      phase: post
+      namespace: telemetry
+      chartVersions: '{{env.addons.telemetry}}'
+      config:
+        enableLogs: false
+        enableTraces: true
+        enableMetrics: true
+        installDashboards: true
+        dashboardCategories: ['agw', 'substrate']
+        installOtelCollectors: false
+        gatewayClassName: enterprise-agentgateway
+        sourceRanges: '{{env.security.vpnSourceRanges}}'
+        grafanaHostname: '{{env.domains.core.grafana}}'
+        grafanaTls:
+          enabled: true
+          secretName: grafana-tls
+          issuer: letsencrypt-dns
+
     - name: otel-collector
-      description: Minimal OTel Collector catching kagent/substrate OTLP into kagent's ClickHouse
+      description: Minimal OTel Collector catching kagent/substrate OTLP into kagent's ClickHouse, fanning traces/metrics to Grafana Tempo/Prometheus
       phase: post
       namespace: kagent-system
       config:
         clusterName: mgmt-cluster
+        telemetryNamespace: telemetry

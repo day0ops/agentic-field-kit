@@ -1032,13 +1032,17 @@ spec:
     # ── Step 14 (Stage 11): kagent-native MCPServer for returns-eligibility ──
     # Not AgentRegistry-catalogued like the other 6 MCP servers -- kagent's own
     # AccessPolicy (Step 16 below) only resolves a targetRef.kind: MCPServer
-    # against a real MCPServer.kagent.dev object.
+    # against a real MCPServer.kagent.dev object. legacyNativeMcpServer: true because
+    # this usecase targets aws-dev's kagent 0.5.6, which still has the native MCPServer
+    # CRD (removed on the 1.0.0-alpha12+ chart line this repo's GKE substrate profiles
+    # target -- see kagent-mcp-server's class doc comment).
     - name: kagent-mcp-server
       description: 'kagent: deploy returns-eligibility as a native MCPServer (check_return_window, override_return_window)'
       config:
         serverName: returns-eligibility
         namespace: kagent-system
         image: '{{env.images.retailReturns.returnsEligibility}}'
+        legacyNativeMcpServer: true
       clusters:
         - name: east
 

@@ -161,6 +161,27 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
       })()
     : [];
 
+  // UI: mirrors buildUiHelmArgs() in index.js exactly.
+  const ui = cfg.ui?.enabled ? cfg.ui : null;
+  const uiHostname = ui ? tpl(ui.hostname, null) : null;
+  const uiTlsSecretName = ui?.tls?.secretName || 'agentgateway-ui-tls';
+  const uiTlsIssuer = ui?.tls?.issuer || 'letsencrypt-dns';
+  const uiArgs = ui
+    ? [
+        `  --set ui.enabled=true`,
+        `  --set-string ui.oidc.issuer="${resolveRunbookTemplatesLiteral(ui.oidc.issuer, { env })}"`,
+        `  --set-string ui.backend.oidc.secret="${ui.oidc.backendClientSecret}"`,
+        // Mirrors the kagent addon's own clickhouse override (chart default is 2 CPUs).
+        `  --set ui.clickhouse.resources.requests.cpu=300m`,
+        ...(ui.oidc.roleMappings
+          ? [
+              `  --set-json 'ui.rbac.roleMapping.roleMappings=${JSON.stringify(ui.oidc.roleMappings)}'`,
+            ]
+          : []),
+        ...(ui.costManagement ? [`  --set ui.features.costManagement=true`] : []),
+      ]
+    : [];
+
   // Build helm args as an array — prevents blank-line continuation issues
   const helmArgs = [
     `  ${registry}/${mainRelease}`,
@@ -187,6 +208,7 @@ kubectl label namespace ${ns} istio.io/dataplane-mode=ambient --overwrite \\
         ]
       : []),
     ...tokenExchangeArgs,
+    ...uiArgs,
     `  --wait`,
     `  --kube-context ${ctx}`,
   ];
@@ -253,12 +275,18 @@ EOF
           from: ${gwFrom}`
     : '';
 
-  // Telemetry policies — applied only when a local OTel traces collector is configured
+  // Telemetry policies — applied only when a local OTel traces collector is configured.
+  // telemetryGatewayName/Namespace override the shared gateway above (gwName/gwNs) --
+  // profiles where each feature owns its own Gateway point this at the one that
+  // actually carries the traffic worth tracing, not whichever gateway this addon itself
+  // happens to create.
+  const telemetryGwName = cfg.telemetryGatewayName || gwName;
+  const telemetryGwNs = cfg.telemetryGatewayNamespace || gwNs;
   const telemetryPoliciesBlock =
-    tracesCollectorName && soloUiNs
+    tracesCollectorName && (soloUiNs || cfg.ui?.enabled)
       ? `
 
-Apply OTel telemetry policies (tracing + access log) for the \`${gwName}\` gateway:
+Apply OTel telemetry policies (tracing + access log) for the \`${telemetryGwName}\` gateway:
 
 \`\`\`bash
 # Tracing policy — sends spans to the local OTel traces collector
@@ -267,12 +295,12 @@ apiVersion: enterpriseagentgateway.solo.io/v1alpha1
 kind: EnterpriseAgentgatewayPolicy
 metadata:
   name: otel-tracing-policy
-  namespace: ${gwNs}
+  namespace: ${telemetryGwNs}
 spec:
   targetRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-      name: ${gwName}
+      name: ${telemetryGwName}
   frontend:
     tracing:
       backendRef:
@@ -293,12 +321,12 @@ apiVersion: enterpriseagentgateway.solo.io/v1alpha1
 kind: EnterpriseAgentgatewayPolicy
 metadata:
   name: otel-access-log-policy
-  namespace: ${gwNs}
+  namespace: ${telemetryGwNs}
 spec:
   targetRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-      name: ${gwName}
+      name: ${telemetryGwName}
   frontend:
     accessLog:
       otlp:
@@ -388,6 +416,82 @@ EOF
 \`\`\``
     : '';
 
+  // UI: mirrors deployUiGateway() in index.js exactly.
+  const uiGatewayBlock = ui
+    ? `
+
+Provision the agentgateway UI certificate \`${uiTlsSecretName}\`:
+
+\`\`\`bash
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ${uiTlsSecretName}
+  namespace: ${ns}
+spec:
+  secretName: ${uiTlsSecretName}
+  issuerRef:
+    name: ${uiTlsIssuer}
+    kind: ClusterIssuer
+  dnsNames:
+    - ${uiHostname}
+EOF
+\`\`\`
+
+Create the UI Gateway and HTTPRoute:
+
+\`\`\`bash
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentgateway-ui-https
+  namespace: ${ns}
+spec:
+  gatewayClassName: enterprise-agentgateway
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: ${uiHostname}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: ${uiTlsSecretName}
+            kind: Secret
+      allowedRoutes:
+        namespaces:
+          from: Same${
+            cfg.ambientEnabled
+              ? `\n  infrastructure:\n    annotations:\n      ambient.istio.io/bypass-inbound-capture: "true"`
+              : ''
+          }
+EOF
+kubectl apply --context ${ctx} -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: agentgateway-ui
+  namespace: ${ns}
+spec:
+  parentRefs:
+    - name: agentgateway-ui-https
+      namespace: ${ns}
+  hostnames:
+    - ${uiHostname}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: enterprise-agentgateway-ui
+          port: 80
+EOF
+\`\`\``
+    : '';
+
   // Label spoke gateway as a global service so hub can reach it via mesh.internal
   const globalServiceBlock = isSpoke
     ? `
@@ -421,6 +525,7 @@ Install via Helm:
 \`\`\`bash
 ${helmCmd}
 \`\`\`
+${uiGatewayBlock}
 
 Create the gateway proxy namespace${cfg.ambientEnabled ? ' (labeled for Ambient mesh)' : ''}:
 
@@ -469,7 +574,15 @@ export function cleanup(addonCfg, clusterName) {
   const publicHttpsCleanup = publicHttps
     ? `\nkubectl delete certificate ${publicHttpsCertName} -n ${gwNs} --ignore-not-found=true --context ${ctx}\nkubectl delete secret ${publicHttpsCertName} -n ${gwNs} --ignore-not-found=true --context ${ctx}`
     : '';
-  return `\`\`\`bash
+  const ui = cfg.ui?.enabled ? cfg.ui : null;
+  const uiTlsSecretName = ui?.tls?.secretName || 'agentgateway-ui-tls';
+  const uiCleanup = ui
+    ? `\nkubectl delete httproute agentgateway-ui -n ${ns} --ignore-not-found=true --context ${ctx}` +
+      `\nkubectl delete gateway agentgateway-ui-https -n ${ns} --ignore-not-found=true --context ${ctx}` +
+      `\nkubectl delete certificate ${uiTlsSecretName} -n ${ns} --ignore-not-found=true --context ${ctx}` +
+      `\nkubectl delete secret ${uiTlsSecretName} -n ${ns} --ignore-not-found=true --context ${ctx}`
+    : '';
+  return `\`\`\`bash${uiCleanup}
 helm uninstall ${mainRelease} ${crdsRelease} -n ${ns} --kube-context ${ctx}${publicHttpsCleanup}
 \`\`\``;
 }
