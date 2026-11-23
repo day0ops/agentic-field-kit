@@ -36,7 +36,7 @@ test('KagentFeature constructor defaults (OSS)', () => {
 test('KagentFeature constructor defaults (enterprise)', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   expect(f.enterprise).toBe(true);
-  expect(f.version).toBe('2026.11.1');
+  expect(f.version).toBe('2026.11.2');
   expect(f.crdsOci).toContain('kagent-enterprise-crds');
   expect(f.controllerOci).toContain('kagent-enterprise');
 });
@@ -80,6 +80,32 @@ test('KagentFeature captureSensitiveContent respects explicit true', () => {
   expect(f.captureSensitiveContent).toBe(true);
 });
 
+test('KagentFeature evaluations defaults to disabled', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  expect(f.evaluations.enabled).toBe(false);
+  expect(f.evaluations.judge.defaultModelConfig).toBeNull();
+  expect(f.evaluations.judge.namespace).toBeNull();
+  expect(f.evaluations.judge.secretNames).toEqual([]);
+});
+
+test('KagentFeature evaluations config parses overrides', () => {
+  const f = new KagentFeature('kagent', {
+    enterprise: true,
+    evaluations: {
+      enabled: true,
+      judge: {
+        defaultModelConfig: 'default-model-config',
+        namespace: 'kagent-system',
+        secretNames: ['kagent-openai'],
+      },
+    },
+  });
+  expect(f.evaluations.enabled).toBe(true);
+  expect(f.evaluations.judge.defaultModelConfig).toBe('default-model-config');
+  expect(f.evaluations.judge.namespace).toBe('kagent-system');
+  expect(f.evaluations.judge.secretNames).toEqual(['kagent-openai']);
+});
+
 test('KagentFeature rbac group defaults', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   expect(f.rbacAdminsGroup).toBe('kagent-admins');
@@ -116,12 +142,12 @@ test('substrate config parses with defaults', () => {
     substrate: { enabled: true, workerPool: { workerImage: 'ghcr.io/x/ateom-gvisor:v0' } },
   });
   expect(f.substrate.enabled).toBe(true);
-  expect(f.substrate.version).toBe('1.0.0-ff3be686');
+  expect(f.substrate.version).toBe('1.1.0-alpha1-7354c972');
   expect(f.substrate.registry).toBe(
     'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm'
   );
   expect(f.substrate.namespace).toBe('ate-system');
-  expect(f.substrate.kubectlAteVersion).toBe('v1.0.0');
+  expect(f.substrate.kubectlAteVersion).toBe('v1.1.0-alpha1');
   expect(f.substrate.workerPool.name).toBe('kagent-default');
   expect(f.substrate.workerPool.replicas).toBe(1);
   expect(f.substrate.workerPool.workerImage).toBe('ghcr.io/x/ateom-gvisor:v0');
@@ -187,7 +213,7 @@ test('substrate snapshots backend derives s3 for an IRSA annotation key', () => 
 test('substrate workerPool.workerImage defaults to the chart version, no config required', () => {
   const f = new KagentFeature('kagent', { enterprise: true, substrate: { enabled: true } });
   expect(f.substrate.workerPool.workerImage).toBe(
-    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v1.0.0-ff3be686'
+    'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v1.1.0-alpha1-7354c972'
   );
 });
 
@@ -240,6 +266,38 @@ test('validate throws when identityAnnotation.key is set without a value', () =>
   expect(() => f.validate()).toThrow('identityAnnotation.value');
 });
 
+// ── Evaluations validate() ───────────────────────────────────────────────────
+
+test('validate throws when evaluations enabled without judge.defaultModelConfig', () => {
+  process.env.ENTERPRISE_KAGENT_LICENSE = 'test-license';
+  const f = new KagentFeature('kagent', {
+    enterprise: true,
+    evaluations: { enabled: true, judge: { secretNames: ['kagent-openai'] } },
+  });
+  expect(() => f.validate()).toThrow('evaluations.judge.defaultModelConfig');
+});
+
+test('validate throws when evaluations enabled without judge.secretNames', () => {
+  process.env.ENTERPRISE_KAGENT_LICENSE = 'test-license';
+  const f = new KagentFeature('kagent', {
+    enterprise: true,
+    evaluations: { enabled: true, judge: { defaultModelConfig: 'default-model-config' } },
+  });
+  expect(() => f.validate()).toThrow('evaluations.judge.secretNames');
+});
+
+test('validate passes for evaluations enabled with judge config set', () => {
+  process.env.ENTERPRISE_KAGENT_LICENSE = 'test-license';
+  const f = new KagentFeature('kagent', {
+    enterprise: true,
+    evaluations: {
+      enabled: true,
+      judge: { defaultModelConfig: 'default-model-config', secretNames: ['kagent-openai'] },
+    },
+  });
+  expect(f.validate()).toBe(true);
+});
+
 test('validate passes for substrate enabled with a full identityAnnotation', () => {
   process.env.ENTERPRISE_KAGENT_LICENSE = 'test-license';
   process.env.ENTERPRISE_AGENTGATEWAY_LICENSE = 'test-agentgateway-license';
@@ -265,7 +323,7 @@ test('_kubectlAteDownloadUrl builds a URL for the current platform', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   const url = f._kubectlAteDownloadUrl();
   expect(url).toStartWith(
-    'https://github.com/kagent-dev/substrate/releases/download/v1.0.0/kubectl-ate-'
+    'https://github.com/kagent-dev/substrate/releases/download/v1.1.0-alpha1/kubectl-ate-'
   );
   expect(url).toMatch(/kubectl-ate-(darwin|linux)-(amd64|arm64)$/);
 });
@@ -373,7 +431,7 @@ test('isAlphaChart is true for 1.x enterprise versions', () => {
 });
 
 test('isAlphaChart is true for CalVer enterprise versions (chart switched schemes at 2026.11.0)', () => {
-  expect(new KagentFeature('kagent', { enterprise: true, version: '2026.11.1' }).isAlphaChart).toBe(
+  expect(new KagentFeature('kagent', { enterprise: true, version: '2026.11.2' }).isAlphaChart).toBe(
     true
   );
   expect(new KagentFeature('kagent', { enterprise: true, version: '2026.11.0' }).isAlphaChart).toBe(
@@ -497,6 +555,66 @@ test('_appendUiHttpRouteArgs builds expected flags for the alpha chart with a ho
   expect(JSON.parse(hostnamesArg.replace('ui.httpRoute.hostnames=', ''))).toEqual([
     'kagent-ui.example.com',
   ]);
+});
+
+// ── Evaluations (agentevals) controller args ─────────────────────────────────
+
+test('_appendEvaluationsArgs is a no-op when not alpha chart or not enabled', () => {
+  const args1 = [];
+  new KagentFeature('kagent', {
+    enterprise: true,
+    version: '0.5.8',
+    evaluations: {
+      enabled: true,
+      judge: { defaultModelConfig: 'default-model-config', secretNames: ['kagent-openai'] },
+    },
+  })._appendEvaluationsArgs(args1);
+  expect(args1).toEqual([]);
+
+  const args2 = [];
+  new KagentFeature('kagent', {
+    enterprise: true,
+    version: '1.0.0-alpha3',
+  })._appendEvaluationsArgs(args2);
+  expect(args2).toEqual([]);
+});
+
+test('_appendEvaluationsArgs builds expected flags for the alpha chart when enabled', () => {
+  const f = new KagentFeature('kagent', {
+    enterprise: true,
+    version: '1.0.0-alpha3',
+    evaluations: {
+      enabled: true,
+      judge: { defaultModelConfig: 'default-model-config', secretNames: ['kagent-openai'] },
+    },
+  });
+  const args = [];
+  f._appendEvaluationsArgs(args);
+  expect(args).toContain('agentevals.enabled=true');
+  expect(args).toContain('agentevals.judge.defaultModelConfig=default-model-config');
+  const secretNamesArg = args.find(a => a.startsWith('agentevals.judge.secretNames='));
+  expect(JSON.parse(secretNamesArg.replace('agentevals.judge.secretNames=', ''))).toEqual([
+    'kagent-openai',
+  ]);
+  expect(args.some(a => a.startsWith('agentevals.judge.namespace='))).toBe(false);
+});
+
+test('_appendEvaluationsArgs includes judge.namespace when set', () => {
+  const f = new KagentFeature('kagent', {
+    enterprise: true,
+    version: '1.0.0-alpha3',
+    evaluations: {
+      enabled: true,
+      judge: {
+        defaultModelConfig: 'default-model-config',
+        namespace: 'kagent-system',
+        secretNames: ['kagent-openai'],
+      },
+    },
+  });
+  const args = [];
+  f._appendEvaluationsArgs(args);
+  expect(args).toContain('agentevals.judge.namespace=kagent-system');
 });
 
 // ── Generated credentials (RustFS / ClickHouse) ──────────────────────────────

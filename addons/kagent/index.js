@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_DIR = path.join(__dirname, 'config');
 
 const OSS_VERSION = '0.7.7';
-const ENTERPRISE_VERSION = '2026.11.1';
+const ENTERPRISE_VERSION = '2026.11.2';
 
 const OSS_REGISTRY = 'oci://ghcr.io/kagent-dev/kagent/helm';
 const ENTERPRISE_REGISTRY = 'oci://us-docker.pkg.dev/solo-public/kagent-enterprise-helm/charts';
@@ -28,7 +28,7 @@ const CONTROLLER_RELEASE = 'kagent';
 // only the fallback default for callers that don't override substrate.version (see
 // kagent.version/substrate.version pairing in config/environments/*.yaml for the version
 // actually in use).
-const SUBSTRATE_VERSION = '1.0.0-ff3be686';
+const SUBSTRATE_VERSION = '1.1.0-alpha1-7354c972';
 const SUBSTRATE_REGISTRY = 'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm';
 // Preview gates ate-api-server/ate-controller/atelet/substrate-atelet all require explicitly
 // enabled -- must match across the substrate and substrate-atelet releases (the latter's own
@@ -79,7 +79,7 @@ const PODCERT_RELEASE = 'substrate-podcert';
 // anyway. Its own version string is the GitHub release tag (e.g. v1.0.0), which differs in
 // format from the Helm chart's own OCI version (SUBSTRATE_VERSION, e.g. 1.0.0-ff3be686)
 // even when they're the same release.
-const KUBECTL_ATE_VERSION = 'v1.0.0';
+const KUBECTL_ATE_VERSION = 'v1.1.0-alpha1';
 
 // Maps the Workload Identity / IRSA annotation key the infra provisioner's own terraform
 // output supplies (see substrate.snapshots.identityAnnotation) to the atelet chart's
@@ -166,6 +166,25 @@ const RBAC_CATALOG_RESOURCES = [
  *     captureSensitiveContent: bool,  // Capture prompt/response text on chat spans (default: false).
  *                                     // Required for kagent-ui's own tracing page to show anything --
  *                                     // captured content may be sensitive (PII, secrets in prompts).
+ *                                     // Also required for evaluations (below) to grade anything --
+ *                                     // without it, judge/response metrics report "not evaluated".
+ *   },
+ *   evaluations: {                // Agent evaluations (agentevals, kagent >= 2026.11.2). Grades
+ *                                 // stored traces with a judge model and surfaces run comparisons
+ *                                 // in the UI. Alpha chart only. Requires the ClickHouse telemetry
+ *                                 // backend (the chart's own default -- this addon never sets
+ *                                 // global.telemetry.backend) and otel.captureSensitiveContent.
+ *     enabled: boolean,           // Default: false
+ *     judge: {
+ *       defaultModelConfig: string, // ModelConfig (name or namespace/name) LLM-judged metrics use
+ *                                   // when an evaluator doesn't name its own. Required when
+ *                                   // evaluations.enabled is true.
+ *       namespace: string,          // Namespace of judge ModelConfigs named without one. Default:
+ *                                   // release namespace.
+ *       secretNames: string[],      // Secrets in the judge namespace holding judge model API keys
+ *                                   // -- agentevals is granted read access to these only. Required
+ *                                   // (non-empty) when evaluations.enabled is true.
+ *     },
  *   },
  *   database: {
  *     bundled: boolean,          // Use bundled postgres (default: true)
@@ -361,6 +380,21 @@ export class KagentFeature extends AddonFeature {
     // even though real spans and trace groups already exist in ClickHouse.
     this.captureSensitiveContent = !!otel.captureSensitiveContent;
 
+    // Agent evaluations (agentevals) -- alpha chart only, see validate() and
+    // _appendEvaluationsArgs
+    const evaluations = config.evaluations || {};
+    const evaluationsJudge = evaluations.judge || {};
+    this.evaluations = {
+      enabled: evaluations.enabled === true,
+      judge: {
+        defaultModelConfig: evaluationsJudge.defaultModelConfig || null,
+        namespace: evaluationsJudge.namespace || null,
+        secretNames: Array.isArray(evaluationsJudge.secretNames)
+          ? evaluationsJudge.secretNames
+          : [],
+      },
+    };
+
     // Database
     const database = config.database || {};
     this.databaseBundled = database.bundled !== false;
@@ -438,6 +472,16 @@ export class KagentFeature extends AddonFeature {
     ) {
       throw new Error(
         'substrate.snapshots.identityAnnotation.value is required when identityAnnotation.key is set'
+      );
+    }
+    if (this.evaluations.enabled && !this.evaluations.judge.defaultModelConfig) {
+      throw new Error(
+        'evaluations.judge.defaultModelConfig is required when evaluations.enabled is true'
+      );
+    }
+    if (this.evaluations.enabled && this.evaluations.judge.secretNames.length === 0) {
+      throw new Error(
+        'evaluations.judge.secretNames must list at least one Secret when evaluations.enabled is true'
       );
     }
     return true;
@@ -611,7 +655,10 @@ export class KagentFeature extends AddonFeature {
       await this._ensureAteSystemNamespace();
       // Generated (or read back) before either install -- both the main release's own
       // rustfs.accessKey/secretKey and the atelet chart's credentialsSecret must agree.
-      const rustfsBundled = this.substrate.snapshots.backend !== 'gcs';
+      // Bundle only when there's no cloud identity at all (local/BYO cluster) -- backend
+      // is 's3' both for that case and for a real external S3 bucket (EKS's
+      // eks.amazonaws.com/role-arn), so it can't drive this decision on its own.
+      const rustfsBundled = !this.substrate.snapshots.identityAnnotationKey;
       const rustfsCreds = rustfsBundled ? await this._ensureRustfsCredentials() : null;
       const atePath = await this._ensureKubectlAte();
       // Must exist before any substrate pod is created -- its pods request certificates
@@ -796,13 +843,23 @@ export class KagentFeature extends AddonFeature {
           : `otel.traces.endpoint=${this.otlpEndpoint}`
       );
       if (this.captureSensitiveContent) {
-        // Controller reads this env var itself at startup and mirrors it onto every
-        // Harness workload's own env too (core/internal/translator/otel.go
-        // TelemetryEnvironment) -- one flag turns on prompt/response capture cluster-wide.
-        controllerArgs.push(
-          '--set-json',
-          'controller.env=[{"name":"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT","value":"SPAN_ONLY"}]'
-        );
+        if (this.isAlphaChart) {
+          // global.telemetry.captureContent is the chart's one supported content switch as of
+          // 2026.11.2 (confirmed against the published chart's _ent_helpers.tpl/ent_validation.yaml):
+          // it fans out to config.telemetry.captureContent (controller) and
+          // config.runtimeDefaults.telemetry.captureContent (every Harness workload) on its own,
+          // and the chart refuses an install that sets either of those directly. Also required for
+          // evaluations (see _appendEvaluationsArgs) to grade anything.
+          controllerArgs.push('--set', 'global.telemetry.captureContent=true');
+        } else {
+          // Pre-alpha chart: no global.telemetry.captureContent key exists, so fall back to the
+          // raw OTel env var the controller reads at startup and mirrors onto every Harness
+          // workload's own env (core/internal/translator/otel.go TelemetryEnvironment).
+          controllerArgs.push(
+            '--set-json',
+            'controller.env=[{"name":"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT","value":"SPAN_ONLY"}]'
+          );
+        }
       }
     }
 
@@ -811,6 +868,7 @@ export class KagentFeature extends AddonFeature {
     }
 
     this._appendUiHttpRouteArgs(controllerArgs);
+    this._appendEvaluationsArgs(controllerArgs);
 
     await KubernetesHelper.helm(controllerArgs, { spinner: this.spinner });
     await KubernetesHelper.assertHelmDeployed(CONTROLLER_RELEASE, this.namespace, this.kubeContext);
@@ -1165,6 +1223,29 @@ export class KagentFeature extends AddonFeature {
   }
 
   /**
+   * Turn on agentevals (evaluations) via the chart's own subchart toggle. Alpha chart only --
+   * agentevals.* doesn't exist on the pre-alpha chart. Requires the ClickHouse telemetry
+   * backend (this addon never sets global.telemetry.backend, so the chart's own default holds)
+   * and global.telemetry.captureContent=true (see the otel.captureSensitiveContent branch above)
+   * for judge/response metrics to grade anything instead of reporting "not evaluated".
+   */
+  _appendEvaluationsArgs(args) {
+    if (!this.isAlphaChart || !this.evaluations.enabled) return;
+
+    args.push(
+      '--set',
+      'agentevals.enabled=true',
+      '--set-string',
+      `agentevals.judge.defaultModelConfig=${this.evaluations.judge.defaultModelConfig}`,
+      '--set-json',
+      `agentevals.judge.secretNames=${JSON.stringify(this.evaluations.judge.secretNames)}`
+    );
+    if (this.evaluations.judge.namespace) {
+      args.push('--set-string', `agentevals.judge.namespace=${this.evaluations.judge.namespace}`);
+    }
+  }
+
+  /**
    * Install the Agent Substrate CRDs chart -- must land before the main substrate release,
    * which includes CRs (e.g. the "gvisor-default" SandboxConfig) of kinds it defines.
    */
@@ -1199,7 +1280,13 @@ export class KagentFeature extends AddonFeature {
    */
   async _installSubstrateAtelet(helmCtxArgs) {
     const ateNs = this.substrate.namespace;
-    const bundled = this.substrate.snapshots.backend !== 'gcs';
+    // Bundle only when there's no cloud identity at all (local/BYO cluster) -- backend is
+    // 's3' both for that case and for a real external S3 bucket (EKS's
+    // eks.amazonaws.com/role-arn), so it can't drive this decision on its own. A real
+    // external backend gets a bare { backend }, leaving endpoint/pathStyle/credentialsSecret
+    // at the chart's own defaults (empty/false) so it hits the real AWS endpoint and the
+    // SDK's default credential chain (IRSA) instead of the bundled RustFS.
+    const bundled = !this.substrate.snapshots.identityAnnotationKey;
 
     this.log(`Installing Agent Substrate Atelet ${this.substrate.version}`);
 
@@ -1213,7 +1300,7 @@ export class KagentFeature extends AddonFeature {
             pathStyle: true,
             credentialsSecret: RUSTFS_CREDENTIALS_SECRET,
           }
-        : { backend: 'gcs' },
+        : { backend: this.substrate.snapshots.backend },
     };
     if (this.otlpEndpoint) {
       // This chart's own otel.endpoint applies to every signal unless a signal sets its own --
@@ -1322,6 +1409,14 @@ export class KagentFeature extends AddonFeature {
       // Must match the Secret the atelet chart's own credentialsSecret reads (see
       // _installSubstrateAtelet) -- the bundled RustFS server itself is configured here.
       values.rustfs = { accessKey: rustfsCreds.accessKey, secretKey: rustfsCreds.secretKey };
+    } else {
+      // Real external S3 (e.g. EKS's IRSA) -- rustfs.enabled defaults to true in the chart,
+      // so leaving this unset still deploys a live but unused bundled store, and its
+      // rustfs-bucket-init Job falls back to the chart's own default creds, which differ
+      // from a prior bundled install's generated ones and fail re-upgrade with "field is
+      // immutable" (Jobs can't change spec.template in place). Disabling it outright avoids
+      // both: confirmed live (2026-11-24) on eks-single-cluster-substrate.
+      values.rustfs = { enabled: false };
     }
 
     const valuesFile = path.join(tmpdir(), `substrate-values-${Date.now()}.yaml`);
@@ -1763,6 +1858,35 @@ export class KagentFeature extends AddonFeature {
     if (setup.exitCode) {
       throw new Error(
         `Failed to bootstrap kagent's PostgreSQL roles/schema: ${setup.stderr?.trim()}`
+      );
+    }
+
+    // kagent >= 2026.11.2's controller also migrates an "enterprise" schema on startup
+    // (enterprise.database.postgres.schema, chart default "enterprise") for eval
+    // sets/configs/runs, owned by the same kagent_owner role -- but applies those migrations
+    // under that role (not kagent_owner_user directly), and the role deliberately holds no
+    // CREATE on the database (see postgres-setup.sql's own REVOKE), so it can't create the
+    // schema itself. Pre-create it here the same way kagent-enterprise's own enterprise
+    // setup.sql does, or the controller exits on "create schema enterprise: permission denied".
+    const entPsqlArgs = [
+      '--no-psqlrc',
+      '--set=ON_ERROR_STOP=1',
+      '--username',
+      'postgres',
+      '--dbname',
+      'atepg',
+      '--set=enterprise_schema=enterprise',
+      '--set=enterprise_owner_role=kagent_owner',
+      '--set=enterprise_readwrite_role=kagent_readwrite',
+    ].join(' ');
+    const entSqlPath = path.join(CONFIG_DIR, 'enterprise-postgres-setup.sql');
+    const entSetup = await CommandRunner.exec(
+      `kubectl ${ctxStr}exec -i -n ${ateNs} postgres-0 -c postgres -- psql ${entPsqlArgs} < "${entSqlPath}"`,
+      { ignoreError: true }
+    );
+    if (entSetup.exitCode) {
+      throw new Error(
+        `Failed to bootstrap kagent's enterprise PostgreSQL schema: ${entSetup.stderr?.trim()}`
       );
     }
 

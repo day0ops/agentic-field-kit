@@ -5,7 +5,7 @@ import { resolveRunbookTemplates } from '../../src/lib/runbook-adapters/template
 const tpl = (v, fb) => (v && !/\{\{/.test(v) ? v : fb);
 
 const OSS_VERSION = '0.7.7';
-const ENTERPRISE_VERSION = '2026.11.1';
+const ENTERPRISE_VERSION = '2026.11.2';
 const OSS_CRDS_OCI = 'oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds';
 const OSS_CONTROLLER_OCI = 'oci://ghcr.io/kagent-dev/kagent/helm/kagent';
 const ENT_CRDS_OCI =
@@ -14,7 +14,7 @@ const ENT_CONTROLLER_OCI =
   'oci://us-docker.pkg.dev/solo-public/kagent-enterprise-helm/charts/kagent-enterprise';
 
 // Agent Substrate defaults -- keep in sync with addons/kagent/index.js
-const SUBSTRATE_VERSION = '1.0.0-ff3be686';
+const SUBSTRATE_VERSION = '1.1.0-alpha1-7354c972';
 const SUBSTRATE_OCI = 'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate';
 const SUBSTRATE_CRDS_OCI =
   'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-crds';
@@ -35,7 +35,7 @@ const SUBSTRATE_NAMESPACE = 'ate-system';
 const PODCERT_NAMESPACE = 'podcertificate-controller-system';
 // GitHub release tag format (v1.0.0), which differs from the Helm chart's own OCI
 // version string (SUBSTRATE_VERSION, e.g. 1.0.0-ff3be686) even for the same release.
-const KUBECTL_ATE_VERSION = 'v1.0.0';
+const KUBECTL_ATE_VERSION = 'v1.1.0-alpha1';
 // Keep in sync with addons/kagent/index.js's SUBSTRATE_PREVIEW_GATES.
 const SUBSTRATE_PREVIEW_GATES = ['PerTemplateSnapshotLocation', 'GoldenEgressPolicy'];
 
@@ -172,6 +172,15 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   }
   const captureSensitiveContent = !!otel.captureSensitiveContent;
 
+  // Agent evaluations (agentevals) -- mirrors addons/kagent/index.js's constructor/
+  // _appendEvaluationsArgs. Alpha chart only.
+  const evaluations = cfg.evaluations || {};
+  const evaluationsEnabled = isAlphaChart && evaluations.enabled === true;
+  const evaluationsJudge = evaluations.judge || {};
+  const evaluationsSecretNames = Array.isArray(evaluationsJudge.secretNames)
+    ? evaluationsJudge.secretNames
+    : [];
+
   const database = cfg.database || {};
   const storageClass = database.storageClass || 'gp3';
 
@@ -198,6 +207,10 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
   const substrateIdentityAnnotation = (substrateCfg.snapshots || {}).identityAnnotation || {};
   const substrateSnapshotBackend =
     ANNOTATION_KEY_TO_STORAGE_BACKEND[substrateIdentityAnnotation.key] || 's3';
+  // Bundle only when there's no cloud identity at all (local/BYO cluster) -- backend is
+  // 's3' both for that case and for a real external S3 bucket (EKS's
+  // eks.amazonaws.com/role-arn), so it can't drive this decision on its own.
+  const substrateBundled = !substrateIdentityAnnotation.key;
 
   const crdsOci = enterprise ? ENT_CRDS_OCI : OSS_CRDS_OCI;
   const controllerOci = enterprise ? ENT_CONTROLLER_OCI : OSS_CONTROLLER_OCI;
@@ -284,13 +297,33 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
     `  --set database.postgres.bundled.storageClassName=${storageClass}`
   );
 
-  if (captureSensitiveContent) {
-    // Controller reads this env var itself at startup and mirrors it onto every Harness
-    // workload's own env too -- one flag turns on prompt/response capture cluster-wide.
-    // Required for kagent-ui's own tracing page to render anything.
+  if (captureSensitiveContent && isAlphaChart) {
+    // global.telemetry.captureContent is the chart's one supported content switch as of
+    // 2026.11.2: it fans out to config.telemetry.captureContent (controller) and
+    // config.runtimeDefaults.telemetry.captureContent (every Harness workload) on its own, and
+    // the chart refuses an install that sets either of those directly. Also required for
+    // evaluations (below) to grade anything instead of reporting "not evaluated".
+    controllerArgs.push(`  --set global.telemetry.captureContent=true`);
+  } else if (captureSensitiveContent) {
+    // Pre-alpha chart: no global.telemetry.captureContent key exists, so fall back to the raw
+    // OTel env var the controller reads at startup and mirrors onto every Harness workload's
+    // own env too -- one flag turns on prompt/response capture cluster-wide.
     controllerArgs.push(
       `  --set-json 'controller.env=[{"name":"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT","value":"SPAN_ONLY"}]'`
     );
+  }
+
+  if (evaluationsEnabled) {
+    controllerArgs.push(
+      `  --set agentevals.enabled=true`,
+      `  --set-string agentevals.judge.defaultModelConfig="${evaluationsJudge.defaultModelConfig}"`,
+      `  --set-json 'agentevals.judge.secretNames=${JSON.stringify(evaluationsSecretNames)}'`
+    );
+    if (evaluationsJudge.namespace) {
+      controllerArgs.push(
+        `  --set-string agentevals.judge.namespace="${evaluationsJudge.namespace}"`
+      );
+    }
   }
 
   if (substrateEnabled) {
@@ -394,9 +427,13 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
       ...(substrateSnapshotBackend === 'gcs' ? ['  storageBackend: gcs'] : []),
       // Must match the Secret the atelet chart's own credentialsSecret reads below --
       // generated once per install (see the RustFS credential step above this file).
-      ...(substrateSnapshotBackend === 'gcs'
-        ? []
-        : ['rustfs:', '  accessKey: "$RUSTFS_ACCESS_KEY"', '  secretKey: "$RUSTFS_SECRET_KEY"']),
+      // rustfs.enabled defaults to true in the chart -- a real external backend (e.g.
+      // EKS's IRSA) disables it outright, or it stays live but unused, and its
+      // rustfs-bucket-init Job's default creds drift from a prior bundled install's
+      // generated ones and fail re-upgrade with "field is immutable".
+      ...(substrateBundled
+        ? ['rustfs:', '  accessKey: "$RUSTFS_ACCESS_KEY"', '  secretKey: "$RUSTFS_SECRET_KEY"']
+        : ['rustfs:', '  enabled: false']),
       'credentialProvider:',
       '  namespacePolicies:',
       '    - atespace: $KAGENT_NAMESPACE',
@@ -553,7 +590,23 @@ kubectl --context ${ctx} exec -i -n $SUBSTRATE_NAMESPACE postgres-0 -c postgres 
   --set=substrate_owner_role=kagent_owner --set=substrate_owner_user=kagent_owner_user --set=substrate_owner_password= \\
   --set=substrate_readwrite_role=kagent_readwrite --set=substrate_readwrite_user=kagent_readwrite_user --set=substrate_readwrite_password= \\
   < addons/kagent/config/postgres-setup.sql
+\`\`\`
 
+kagent >= 2026.11.2's controller also migrates an "enterprise" schema on startup
+(\`enterprise.database.postgres.schema\`, chart default "enterprise") for eval sets/configs/runs,
+under the \`kagent_owner\` role -- which deliberately holds no \`CREATE\` on the database, so it
+can't create the schema itself. Pre-create it the same way kagent-enterprise's own enterprise
+setup.sql does, or the controller exits on "create schema enterprise: permission denied":
+
+\`\`\`bash
+kubectl --context ${ctx} exec -i -n $SUBSTRATE_NAMESPACE postgres-0 -c postgres -- psql \\
+  --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres --dbname atepg \\
+  --set=enterprise_schema=enterprise \\
+  --set=enterprise_owner_role=kagent_owner --set=enterprise_readwrite_role=kagent_readwrite \\
+  < addons/kagent/config/enterprise-postgres-setup.sql
+\`\`\`
+
+\`\`\`bash
 kubectl --context ${ctx} create secret generic kagent-postgres-readwrite -n $KAGENT_NAMESPACE \\
   --from-literal=readWriteConnectionString="postgresql://kagent_readwrite_user@postgres.$SUBSTRATE_NAMESPACE.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/postgres.podcert.ate.dev/trust-bundle.pem&sslcert=/run/postgres.podcert.ate.dev/kagent_readwrite_user.pem&sslkey=/run/postgres.podcert.ate.dev/kagent_readwrite_user.pem" \\
   --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
@@ -611,7 +664,7 @@ helm upgrade --install substrate-crds \\
 \`\`\`
 
 ${
-  substrateSnapshotBackend === 'gcs'
+  !substrateBundled
     ? ''
     : `Generate (once) the RustFS credential both the main substrate release's own
 \`rustfs.secretKey\` (below) and the atelet chart's \`credentialsSecret\` must agree on --
@@ -663,13 +716,13 @@ preview:
 ${SUBSTRATE_PREVIEW_GATES.map(gate => `  - ${gate}`).join('\n')}
 objectStore:
 ${
-  substrateSnapshotBackend === 'gcs'
-    ? '  backend: gcs'
-    : `  backend: s3
+  substrateBundled
+    ? `  backend: s3
   endpoint: http://rustfs.$SUBSTRATE_NAMESPACE.svc:9000
   region: us-east-1
   pathStyle: true
   credentialsSecret: ${RUSTFS_CREDENTIALS_SECRET}`
+    : `  backend: ${substrateSnapshotBackend}`
 }
 ${
   otlpEndpoint

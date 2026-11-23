@@ -16,10 +16,13 @@ spec:
     enable_workload_storage: true
     workload_storage_force_destroy: true
     workload_storage_ksa_namespace: ate-system
-    # ate-api-server also needs its own binding (manages golden-snapshot Tags directly),
-    # but the eks module's IRSA trust policy only supports a single KSA today, unlike
-    # gke-single-cluster-substrate's list -- atelet only until that's extended.
-    workload_storage_ksa_name: atelet
+    # Bound here to the atelet worker's and ate-api-server's KSAs so Agent Substrate can use
+    # it for actor snapshots. ate-api-server needs its own binding too -- it manages
+    # golden-snapshot Tags directly in the bucket; without it, golden actors suspend and
+    # snapshot fine but their Agent never reaches Ready.
+    workload_storage_ksa_name:
+      - atelet
+      - ate-api-server
 
     enable_node_sleep_schedule: true
     node_sleep_cron: '30 18 * * MON-FRI'
