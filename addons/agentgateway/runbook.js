@@ -21,7 +21,7 @@ export function envVarsFor(addonCfg, _clusterName) {
 
 export function envExportsFor(addonCfg, _profile, env) {
   const cfg = addonCfg.config || {};
-  const version = resolveRunbookTemplates(addonCfg.version, { env }) || 'v2026.5.1';
+  const version = resolveRunbookTemplates(addonCfg.version, { env }) || 'v2026.11.1';
   const exports = [
     { name: 'AGENTGATEWAY_VERSION', value: version, comment: 'Agentgateway Enterprise version' },
     {
@@ -58,7 +58,7 @@ export async function generate(_subIndex, addonCfg, clusterName, profile, env) {
   const gwPort = gateway.port || 80;
   const gwProtocol = gateway.protocol || 'HTTP';
   const gwFrom = gateway.allowedRoutes?.namespaces?.from || 'All';
-  const gatewayApiVersion = cfg.gatewayApiVersion || profile.spec?.gatewayApiVersion || 'v1.4.0';
+  const gatewayApiVersion = cfg.gatewayApiVersion || profile.spec?.gatewayApiVersion || 'v1.6.0';
   const soloUiNs = cfg.soloUiNamespace || '';
   const gwServiceType = gateway.serviceType || null;
   const additionalHostnames = gateway.additionalHostnames || [];

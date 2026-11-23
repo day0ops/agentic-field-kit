@@ -3,12 +3,15 @@ kind: Profile
 metadata:
   name: gke-single-cluster-with-kagent-substrate
   description: |
-    Single GKE cluster with kagent Enterprise + Agent Substrate (no Istio Ambient mesh), keycloak OIDC login, and enterprise agentgateway fronting the UI over Google Cloud DNS + Let's Encrypt.
+    Single GKE cluster with kagent Enterprise + Agent Substrate
+    - keycloak OIDC login
+    - enterprise agentgateway
+    - telemetry
 
 spec:
   infra: gke-single-cluster-substrate
   environment: google-dev
-  gatewayApiVersion: v1.6.0
+  gatewayApiVersion: v1.6.3
 
   addons:
     - name: cert-manager
@@ -114,7 +117,6 @@ spec:
                 lastName: Reader
                 memberOf:
                   - kagent-readers
-            # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile
 
     - name: kagent
       description: Solo Enterprise for kagent AI agent platform + Agent Substrate

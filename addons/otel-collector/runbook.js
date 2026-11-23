@@ -1,6 +1,9 @@
 // addons/otel-collector/runbook.js
 
 const DEFAULT_CHART_VERSION = '0.158.0';
+// Keep in sync with addons/kagent/index.js's CLICKHOUSE_CREDENTIALS_SECRET -- this addon
+// reads the same Secret the kagent addon generates, rather than assuming chart defaults.
+const CLICKHOUSE_CREDENTIALS_SECRET = 'kagent-clickhouse-credentials';
 
 export function envVarsFor(_addonCfg, _clusterName) {
   return [];
@@ -25,10 +28,10 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, _env)
   const clickhouseHost = addon.clickhouseHost || `kagent-clickhouse.${namespace}.svc.cluster.local`;
   const clickhousePort = addon.clickhousePort || 9000;
   const clickhouseDatabase = addon.clickhouseDatabase || 'kagent';
-  // Matches the kagent-enterprise chart's own default (enterprise.database.clickhouse.*);
-  // override here if that chart's password was changed from its default.
-  const clickhouseUsername = addon.clickhouseUsername || 'default';
-  const clickhousePassword = addon.clickhousePassword || 'password';
+  // Explicit overrides bypass the generated Secret this addon normally reads credentials
+  // from (see CLICKHOUSE_CREDENTIALS_SECRET) -- e.g. for a BYO or external ClickHouse.
+  const clickhouseUsernameOverride = addon.clickhouseUsername || null;
+  const clickhousePasswordOverride = addon.clickhousePassword || null;
   // Matches the kagent-ui chart's own default (EXTENSION_LOCAL_CLUSTER_NAME);
   // override here if that chart's cluster name was changed from its default.
   const clusterNameAttr = addon.clusterName || 'mgmt-cluster';
@@ -61,7 +64,21 @@ Without this attribute every trace's Cluster field is empty and never matches, s
 shows "No Traces On This Cluster" regardless of how much real data ClickHouse has --
 live-confirmed (2026-09-28) as the actual root cause of that exact empty state.
 
+${
+  clickhouseUsernameOverride && clickhousePasswordOverride
+    ? ''
+    : `Read the ClickHouse credential the kagent addon generated (see its own runbook's
+"Generate ClickHouse credentials" step) rather than assuming the chart's default/password:
+
 \`\`\`bash
+CLICKHOUSE_CREDS=$(kubectl --context ${ctx} get secret ${CLICKHOUSE_CREDENTIALS_SECRET} -n ${namespace} \\
+  -o jsonpath='{.data.username}|{.data.password}')
+CLICKHOUSE_USERNAME=$(echo "$CLICKHOUSE_CREDS" | cut -d'|' -f1 | base64 --decode)
+CLICKHOUSE_PASSWORD=$(echo "$CLICKHOUSE_CREDS" | cut -d'|' -f2 | base64 --decode)
+\`\`\`
+
+`
+}\`\`\`bash
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
 helm repo update
 
@@ -89,11 +106,11 @@ config:
           value: ${clusterNameAttr}
   exporters:
     clickhouse:
-      endpoint: tcp://${clickhouseUsername}:${clickhousePassword}@${clickhouseHost}:${clickhousePort}?database=${clickhouseDatabase}
+      endpoint: tcp://${clickhouseUsernameOverride || '$CLICKHOUSE_USERNAME'}:${clickhousePasswordOverride || '$CLICKHOUSE_PASSWORD'}@${clickhouseHost}:${clickhousePort}?database=${clickhouseDatabase}
       create_schema: true
       timeout: 10s
     clickhouse/genai:
-      endpoint: tcp://${clickhouseUsername}:${clickhousePassword}@${clickhouseHost}:${clickhousePort}?database=${clickhouseDatabase}&dial_timeout=10s&enable_json_type=1
+      endpoint: tcp://${clickhouseUsernameOverride || '$CLICKHOUSE_USERNAME'}:${clickhousePasswordOverride || '$CLICKHOUSE_PASSWORD'}@${clickhouseHost}:${clickhousePort}?database=${clickhouseDatabase}&dial_timeout=10s&enable_json_type=1
       json: true
       create_schema: false
       traces_table_name: otel_traces_json

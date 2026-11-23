@@ -278,6 +278,45 @@ test('_kubectlAteDownloadUrl honors kubectlAteVersion override', () => {
   expect(f._kubectlAteDownloadUrl()).toContain('/download/v0.2.0-beta8/kubectl-ate-');
 });
 
+test('_kubectlAteChecksumUrl appends .sha256 to the binary download URL', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  expect(f._kubectlAteChecksumUrl()).toBe(`${f._kubectlAteDownloadUrl()}.sha256`);
+});
+
+test('_parseSha256Checksum parses a sha256sum-style line matching the asset name', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  const content =
+    'aa94b04dfb29a649094eafeae754300587abb6ab1fbda529cebe149b78177d0c  kubectl-ate-darwin-amd64\n';
+  expect(f._parseSha256Checksum(content, 'kubectl-ate-darwin-amd64')).toBe(
+    'aa94b04dfb29a649094eafeae754300587abb6ab1fbda529cebe149b78177d0c'
+  );
+});
+
+test('_parseSha256Checksum parses bare hex content with no filename suffix', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  const content = '0869A8A441AD2FEF3E7AD9BE9222FF7FBDC38D8C820C948B2B81337854B1AB67\n';
+  expect(f._parseSha256Checksum(content, 'kubectl-ate-darwin-arm64')).toBe(
+    '0869a8a441ad2fef3e7ad9be9222ff7fbdc38d8c820c948b2b81337854b1ab67'
+  );
+});
+
+test('_parseSha256Checksum skips lines for a different asset and matches the right one', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  const content = [
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  kubectl-ate-linux-amd64',
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  kubectl-ate-darwin-arm64',
+  ].join('\n');
+  expect(f._parseSha256Checksum(content, 'kubectl-ate-darwin-arm64')).toBe(
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  );
+});
+
+test('_parseSha256Checksum returns null for empty or malformed content', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  expect(f._parseSha256Checksum('', 'kubectl-ate-darwin-arm64')).toBeNull();
+  expect(f._parseSha256Checksum('not a checksum', 'kubectl-ate-darwin-arm64')).toBeNull();
+});
+
 test('_buildSubstrateControllerArgs returns empty array when disabled', () => {
   const f = new KagentFeature('kagent', { enterprise: true });
   expect(f._buildSubstrateControllerArgs()).toEqual([]);
@@ -458,4 +497,30 @@ test('_appendUiHttpRouteArgs builds expected flags for the alpha chart with a ho
   expect(JSON.parse(hostnamesArg.replace('ui.httpRoute.hostnames=', ''))).toEqual([
     'kagent-ui.example.com',
   ]);
+});
+
+// ── Generated credentials (RustFS / ClickHouse) ──────────────────────────────
+
+test('_randomCredential generates a URL/shell-safe string with no padding', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  const value = f._randomCredential();
+  expect(value.length).toBeGreaterThan(0);
+  expect(value).toMatch(/^[A-Za-z0-9_-]+$/);
+});
+
+test('_randomCredential never repeats across calls', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  expect(f._randomCredential()).not.toBe(f._randomCredential());
+});
+
+test('_decodeSecretPair decodes a "b64|b64" jsonpath result', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  const encoded = `${Buffer.from('rustfsadmin').toString('base64')}|${Buffer.from('s3cr3t').toString('base64')}`;
+  expect(f._decodeSecretPair(encoded)).toEqual(['rustfsadmin', 's3cr3t']);
+});
+
+test('_decodeSecretPair returns null for empty or malformed content', () => {
+  const f = new KagentFeature('kagent', { enterprise: true });
+  expect(f._decodeSecretPair('')).toBeNull();
+  expect(f._decodeSecretPair('no-pipe-here')).toBeNull();
 });

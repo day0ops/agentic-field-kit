@@ -11,7 +11,7 @@ metadata:
 spec:
   infra: eks-multi-cluster
   environment: aws-dev
-  gatewayApiVersion: v1.5.0
+  gatewayApiVersion: v1.6.3
 
   mesh:
     istioVersion: 1.30.3

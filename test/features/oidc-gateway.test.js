@@ -52,6 +52,59 @@ describe('oidc-gateway, createGateway: true, with oidc.*', () => {
       { group: 'gateway.networking.k8s.io', kind: 'HTTPRoute', name: 'app' },
     ]);
   });
+
+  it('deploy applies the Secret/AuthConfig/Policy gate before the HTTPRoute', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.log = () => {};
+    await f.deploy();
+    expect(applied).toEqual([
+      'Certificate',
+      'EnterpriseAgentgatewayParameters',
+      'Gateway',
+      'Secret',
+      'AuthConfig',
+      'EnterpriseAgentgatewayPolicy',
+      'HTTPRoute',
+    ]);
+  });
+
+  it('cleanup deletes the HTTPRoute/Gateway before the Secret/AuthConfig/Policy gate', async () => {
+    const deleted = [];
+    f.deleteResource = async kind => deleted.push(kind);
+    f.log = () => {};
+    await f.cleanup();
+    expect(deleted).toEqual([
+      'httproute',
+      'gateway',
+      'enterpriseagentgatewaypolicy',
+      'authconfig',
+      'secret',
+      'enterpriseagentgatewayparameters',
+      'certificate',
+    ]);
+  });
+});
+
+describe('oidc-gateway, sourceRanges', () => {
+  it('buildGatewayParameters sets native loadBalancerSourceRanges alongside the AWS NLB annotation', () => {
+    const f = new OidcGatewayFeature('oidc-gateway', {
+      ...baseConfig,
+      sourceRanges: ['10.0.0.0/8'],
+    });
+    const params = f.buildGatewayParameters();
+    expect(params.spec.service.spec.loadBalancerSourceRanges).toEqual(['10.0.0.0/8']);
+    expect(
+      params.spec.service.metadata.annotations[
+        'service.beta.kubernetes.io/load-balancer-source-ranges'
+      ]
+    ).toBe('10.0.0.0/8');
+  });
+
+  it('buildGatewayParameters omits loadBalancerSourceRanges when sourceRanges is empty', () => {
+    const f = new OidcGatewayFeature('oidc-gateway', baseConfig);
+    expect(f.buildGatewayParameters().spec.service.spec).toBeUndefined();
+  });
 });
 
 describe('oidc-gateway, createGateway: false (attach-only)', () => {

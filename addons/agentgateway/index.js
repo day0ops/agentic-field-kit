@@ -11,8 +11,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_DIR = path.join(__dirname, 'config');
 
 const OSS_VERSION = 'v1.2.0';
-const ENTERPRISE_VERSION = 'v2.2.0';
-const DEFAULT_GATEWAY_API_VERSION = 'v1.5.0';
+const ENTERPRISE_VERSION = 'v2026.11.1';
+const DEFAULT_GATEWAY_API_VERSION = 'v1.6.0';
 const OSS_REGISTRY = 'oci://cr.agentgateway.dev/charts';
 const ENTERPRISE_REGISTRY = 'oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts';
 

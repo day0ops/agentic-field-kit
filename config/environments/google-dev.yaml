@@ -55,6 +55,15 @@ spec:
     vpnSourceRanges:
       - 165.99.148.61/32
       - 64.226.138.86/32
+      - 149.28.68.29/32
+      - 107.191.62.86/32
+      - 64.226.138.86/32
+      - 209.35.249.70/32
+      - 216.238.92.73/32
+      - 209.35.248.11/32
+      - 139.84.211.68/32
+      - 124.198.249.3/32
+      - 155.138.145.87/32
 
   keycloak:
     image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.4
@@ -67,7 +76,7 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.10.1
+    version: v2026.11.1
 
   kagent:
     scheme: https

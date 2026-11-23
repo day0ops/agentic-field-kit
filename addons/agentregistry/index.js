@@ -758,27 +758,51 @@ export class AgentregistryFeature extends AddonFeature {
       this.kubeContext
     );
 
+    const otelGatewaySpec = {
+      gatewayClassName: 'enterprise-agentgateway',
+      listeners: [
+        {
+          name: 'https',
+          port: 443,
+          protocol: 'HTTPS',
+          hostname: cfg.hostname,
+          tls: {
+            mode: 'Terminate',
+            certificateRefs: [{ name: cfg.tlsSecretName, kind: 'Secret' }],
+          },
+          allowedRoutes: { namespaces: { from: 'Same' } },
+        },
+      ],
+    };
+
+    if (this.sourceRanges) {
+      // Native spec.loadBalancerSourceRanges via EnterpriseAgentgatewayParameters, same
+      // pattern as kagent's UI Gateway -- this GatewayClass is always enterprise-agentgateway,
+      // so nlbSourceRangeAnnotations (Istio-only) doesn't apply here.
+      await this.applyResource(
+        {
+          apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
+          kind: 'EnterpriseAgentgatewayParameters',
+          metadata: { name: 'agentregistry-telemetry-https-params', namespace: this.namespace },
+          spec: { service: { spec: { loadBalancerSourceRanges: this.sourceRanges } } },
+        },
+        this.kubeContext
+      );
+      otelGatewaySpec.infrastructure = {
+        parametersRef: {
+          name: 'agentregistry-telemetry-https-params',
+          group: 'enterpriseagentgateway.solo.io',
+          kind: 'EnterpriseAgentgatewayParameters',
+        },
+      };
+    }
+
     await this.applyResource(
       {
         apiVersion: 'gateway.networking.k8s.io/v1',
         kind: 'Gateway',
         metadata: { name: 'agentregistry-telemetry-https', namespace: this.namespace },
-        spec: {
-          gatewayClassName: 'enterprise-agentgateway',
-          listeners: [
-            {
-              name: 'https',
-              port: 443,
-              protocol: 'HTTPS',
-              hostname: cfg.hostname,
-              tls: {
-                mode: 'Terminate',
-                certificateRefs: [{ name: cfg.tlsSecretName, kind: 'Secret' }],
-              },
-              allowedRoutes: { namespaces: { from: 'Same' } },
-            },
-          ],
-        },
+        spec: otelGatewaySpec,
       },
       this.kubeContext
     );
@@ -825,6 +849,12 @@ export class AgentregistryFeature extends AddonFeature {
       this.namespace,
       this.kubeContext
     );
+    await this.deleteResource(
+      'EnterpriseAgentgatewayParameters',
+      'agentregistry-telemetry-https-params',
+      this.namespace,
+      this.kubeContext
+    ).catch(() => {});
     await this.deleteResource(
       'Certificate',
       this.otelGateway.tlsSecretName,

@@ -218,6 +218,19 @@ spec:
         # actually matches -- plus kagent-controller's own path-mux prefix
         # (/agents/<namespace>), since agent_invoker.go appends only /<agentName>.
         agentGatewayBaseUrl: '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}/agents/kagent-system'
+        # Enables Operator Studio's real Agent Substrate panel (request-parking/density) -
+        # presence of ateApiEndpoint is what turns on the ServiceAccount/RBAC + kubectl-ate
+        # shell-out in console/source.go; workerPoolName/kagentControllerBaseUrl keep their
+        # feature defaults (agora-workers / this namespace's kagent-controller Service).
+        ateApiEndpoint: api.ate-system.svc.cluster.local:443
+        # Enables Operator Studio's isolation-check probe (console/isolation_probe.go) - a
+        # client-credentials identity, never the visitor's own forwarded token, since
+        # trust-safety/auto-bidder are deliberately never exposed on the public
+        # agentgateway route (see the 2026-11-01 agora-oidc-agentgateway-a2a design doc).
+        systemKeycloak:
+          hostname: '{{env.domains.core.keycloak}}'
+          clientId: agora-console-system
+          clientSecret: agora-console-system-secret
 
     - name: oidc-gateway
       description: Keycloak login gate for the Agora console's /account prefix (buyer/seller/operator actions)
@@ -391,6 +404,26 @@ spec:
             accessLevel: manage
           - resource: sessions-all-creators
             accessLevel: view
+
+    # agora-console-system's client-credentials identity (config/profiles/
+    # local-single-cluster.yaml) - lets the Operator Studio isolation-check probe
+    # (console/isolation_probe.go) call SendMessage on trust-safety/auto-bidder
+    # directly, in-cluster. Same grant shape as the customer policies above -
+    # sessions is the distinct resource key SendMessage actually needs. Deliberately
+    # no sessions-all-creators here - that's cross-user session oversight, which
+    # this system identity (unlike operators) has no reason to need.
+    - name: kagent-rbac-policy
+      description: Grant the console's own system identity access to call SendMessage on trust-safety/auto-bidder for isolation-check probes
+      config:
+        policyName: agora-system-isolation-probe
+        namespace: kagent-system
+        groups:
+          - agora-system
+        grants:
+          - resource: agents
+            accessLevel: view
+          - resource: sessions
+            accessLevel: manage
 
   tests:
     - name: swarm-ready

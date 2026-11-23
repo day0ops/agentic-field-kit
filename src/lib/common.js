@@ -419,6 +419,18 @@ const ERROR_HINTS = [
   },
 ];
 
+const SECRET_ARG_KEY_PATTERN = /password|secret|token|license|apikey|api-key|credential/i;
+
+/** Masks the value half of `key=value` style args whose key looks secret-bearing. */
+function redactSecretArgs(args) {
+  return args.map(arg => {
+    const eqIdx = arg.indexOf('=');
+    if (eqIdx === -1) return arg;
+    const key = arg.slice(0, eqIdx);
+    return SECRET_ARG_KEY_PATTERN.test(key) ? `${key}=***` : arg;
+  });
+}
+
 function enrichError(error) {
   const text = [error.message, error.stderr, error.stdout].filter(Boolean).join('\n');
   for (const { pattern, hint } of ERROR_HINTS) {
@@ -436,7 +448,7 @@ export class CommandRunner {
     const { verbose = false, cwd = process.cwd() } = options;
 
     if (verbose) {
-      Logger.debug(`Running: ${command} ${args.join(' ')}`);
+      Logger.debug(`Running: ${command} ${redactSecretArgs(args).join(' ')}`);
     }
 
     try {
@@ -446,6 +458,8 @@ export class CommandRunner {
       });
       return result;
     } catch (error) {
+      Logger.debug(`Command failed: ${command} ${redactSecretArgs(args).join(' ')}`);
+      error.message = `${command} failed (exit code ${error.exitCode ?? 'unknown'})`;
       if (!options.ignoreError) {
         throw enrichError(error);
       }

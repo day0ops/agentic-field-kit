@@ -91,6 +91,230 @@ describe('agora-console', () => {
     });
     expect(() => bad.validate()).toThrow('consoleImage');
   });
+
+  it('builds a ServiceAccount, Role, and RoleBinding for the console namespace', () => {
+    const sa = f.buildServiceAccount();
+    expect(sa.kind).toBe('ServiceAccount');
+    expect(sa.metadata.name).toBe('agora-console');
+    expect(sa.metadata.namespace).toBe('agora-demo');
+
+    const role = f.buildRole();
+    expect(role.kind).toBe('Role');
+    expect(role.metadata.namespace).toBe('agora-demo');
+
+    const rb = f.buildRoleBinding();
+    expect(rb.kind).toBe('RoleBinding');
+    expect(rb.subjects).toEqual([
+      { kind: 'ServiceAccount', name: 'agora-console', namespace: 'agora-demo' },
+    ]);
+  });
+
+  it('grants ate-client TokenRequest RBAC cross-namespace into ateNamespace (default ate-system)', () => {
+    const role = f.buildAteTokenRole();
+    expect(role.metadata.namespace).toBe('ate-system');
+    expect(role.rules).toEqual([
+      {
+        apiGroups: [''],
+        resources: ['serviceaccounts/token'],
+        resourceNames: ['ate-client'],
+        verbs: ['create'],
+      },
+    ]);
+
+    const rb = f.buildAteTokenRoleBinding();
+    expect(rb.metadata.namespace).toBe('ate-system');
+    expect(rb.subjects).toEqual([
+      { kind: 'ServiceAccount', name: 'agora-console', namespace: 'agora-demo' },
+    ]);
+  });
+});
+
+// ateApiEndpoint's presence is the opt-in trigger for the whole substrate-
+// status capability (RBAC objects, serviceAccountName, ATE_* env) - the same
+// "optional, presence-triggers-wiring" convention this feature already uses
+// for agentGatewayBaseUrl. Usecases that never set it (e.g. the stale
+// agora-demo.yaml variant) get zero new resources and zero behavior change.
+describe('agora-console with ateApiEndpoint configured', () => {
+  const f = new AgoraConsoleFeature('agora-console', {
+    namespace: 'agora-demo',
+    catalogApiImage: 'example.com/catalog-api:v1',
+    consoleImage: 'example.com/console:v1',
+    hostname: 'agora.example.com',
+    ateApiEndpoint: 'api.ate-system.svc.cluster.local:443',
+  });
+
+  it('builds the console Deployment with serviceAccountName set and ATE_* env wired, defaulting workerPoolName and AGORA_ATESPACE from agentNamespace (kagent-system), never this.namespace', () => {
+    const d = f.buildConsoleDeployment();
+    expect(d.spec.template.spec.serviceAccountName).toBe('agora-console');
+    const env = d.spec.template.spec.containers[0].env;
+    expect(env).toContainEqual({
+      name: 'ATE_API_ENDPOINT',
+      value: 'api.ate-system.svc.cluster.local:443',
+    });
+    // AGORA_ATESPACE, never ATE_NAMESPACE - kubectl-ate itself reads
+    // ATE_NAMESPACE from its own process environment as its control-plane
+    // target (solo-io/substrate's internal/ateclient/builder.go); reusing
+    // that name here would silently redirect kubectl-ate away from the real
+    // ate-system control plane (confirmed during the final review of this
+    // feature). Defaults to agentNamespace's own default ('kagent-system'),
+    // NOT this feature's `namespace` ('agora-demo' in this fixture) - the
+    // console's own deployment namespace and the agents' namespace are
+    // different concepts that only happen to coincide in agora-demo-local.
+    expect(env).toContainEqual({ name: 'AGORA_ATESPACE', value: 'kagent-system' });
+    expect(env).not.toContainEqual(expect.objectContaining({ name: 'ATE_NAMESPACE' }));
+    expect(env).toContainEqual({ name: 'ATE_WORKER_POOL_NAME', value: 'agora-workers' });
+  });
+
+  it('wires AGORA_ATESPACE and KAGENT_PROBE_BASE_URL from an explicit agentNamespace config field when set', () => {
+    const f2 = new AgoraConsoleFeature('agora-console', {
+      namespace: 'agora-demo',
+      catalogApiImage: 'example.com/catalog-api:v1',
+      consoleImage: 'example.com/console:v1',
+      hostname: 'agora.example.com',
+      ateApiEndpoint: 'api.ate-system.svc.cluster.local:443',
+      systemKeycloak: {
+        hostname: 'keycloak.example.com',
+        clientId: 'agora-console-system',
+        clientSecret: 'secret',
+      },
+      agentNamespace: 'some-other-namespace',
+    });
+    const env = f2.buildConsoleDeployment().spec.template.spec.containers[0].env;
+    expect(env).toContainEqual({
+      name: 'KAGENT_PROBE_BASE_URL',
+      value:
+        'http://kagent-controller.some-other-namespace.svc.cluster.local:8083/agents/some-other-namespace',
+    });
+    expect(env).toContainEqual({ name: 'AGORA_ATESPACE', value: 'some-other-namespace' });
+  });
+
+  it('deploy() applies the RBAC objects before the Deployment', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.log = () => {};
+    await f.deploy();
+    expect(applied).toEqual([
+      'ServiceAccount',
+      'Role',
+      'RoleBinding',
+      'Role',
+      'RoleBinding',
+      'Deployment',
+      'Service',
+      'Deployment',
+      'Service',
+      'Certificate',
+      'Gateway',
+      'HTTPRoute',
+    ]);
+  });
+
+  it('cleanup() deletes the RBAC objects', async () => {
+    const deleted = [];
+    f.deleteResource = async kind => deleted.push(kind);
+    f.log = () => {};
+    await f.cleanup();
+    expect(deleted).toContain('serviceaccount');
+    expect(deleted).toContain('role');
+    expect(deleted).toContain('rolebinding');
+  });
+});
+
+describe('agora-console with systemKeycloak configured', () => {
+  const f = new AgoraConsoleFeature('agora-console', {
+    namespace: 'agora-demo',
+    catalogApiImage: 'example.com/catalog-api:v1',
+    consoleImage: 'example.com/console:v1',
+    hostname: 'agora.example.com',
+    systemKeycloak: {
+      hostname: 'keycloak.example.com',
+      clientId: 'agora-console-system',
+      clientSecret: 'secret',
+    },
+  });
+
+  it('wires the system OIDC token env and defaults kagentControllerBaseUrl from agentNamespace (kagent-system), never this.namespace', () => {
+    const env = f.buildConsoleDeployment().spec.template.spec.containers[0].env;
+    expect(env).toContainEqual({
+      name: 'AGORA_SYSTEM_OIDC_TOKEN_URL',
+      value: 'https://keycloak.example.com/realms/kagent/protocol/openid-connect/token',
+    });
+    expect(env).toContainEqual({
+      name: 'AGORA_SYSTEM_OIDC_CLIENT_ID',
+      value: 'agora-console-system',
+    });
+    const secretEnv = env.find(e => e.name === 'AGORA_SYSTEM_OIDC_CLIENT_SECRET');
+    expect(secretEnv.value).toBeUndefined();
+    expect(secretEnv.valueFrom.secretKeyRef).toEqual({
+      name: 'agora-console-system-keycloak',
+      key: 'client-secret',
+    });
+    // Not agora-demo (this fixture's `namespace`) - kagent-controller and the
+    // agents it serves live in agentNamespace, a different concept from
+    // where the console itself is deployed (final review finding #4).
+    expect(env).toContainEqual({
+      name: 'KAGENT_PROBE_BASE_URL',
+      value: 'http://kagent-controller.kagent-system.svc.cluster.local:8083/agents/kagent-system',
+    });
+  });
+
+  it('does not require ateApiEndpoint - no serviceAccountName or RBAC objects needed for the probe alone', () => {
+    const d = f.buildConsoleDeployment();
+    expect(d.spec.template.spec.serviceAccountName).toBeUndefined();
+  });
+
+  it('builds a Secret holding the systemKeycloak client secret', () => {
+    const s = f.buildSystemKeycloakSecret();
+    expect(s.kind).toBe('Secret');
+    expect(s.metadata.name).toBe('agora-console-system-keycloak');
+    expect(s.metadata.namespace).toBe('agora-demo');
+    expect(s.stringData).toEqual({ 'client-secret': 'secret' });
+  });
+
+  it('deploy() applies the systemKeycloak Secret before the console Deployment', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.log = () => {};
+    await f.deploy();
+    expect(applied.indexOf('Secret')).toBeGreaterThanOrEqual(0);
+    expect(applied.indexOf('Secret')).toBeLessThan(applied.lastIndexOf('Deployment'));
+  });
+
+  it('cleanup() deletes the systemKeycloak Secret', async () => {
+    const deleted = [];
+    f.deleteResource = async kind => deleted.push(kind);
+    f.log = () => {};
+    await f.cleanup();
+    expect(deleted).toContain('secret');
+  });
+});
+
+describe('agora-console omits substrate/probe wiring entirely when unconfigured', () => {
+  const f = new AgoraConsoleFeature('agora-console', {
+    namespace: 'agora-demo',
+    catalogApiImage: 'example.com/catalog-api:v1',
+    consoleImage: 'example.com/console:v1',
+    hostname: 'agora.example.com',
+  });
+
+  it("omits ATE_*/AGORA_SYSTEM_OIDC_*/KAGENT_PROBE_BASE_URL and serviceAccountName (preserves today's stub behavior)", () => {
+    const d = f.buildConsoleDeployment();
+    expect(d.spec.template.spec.serviceAccountName).toBeUndefined();
+    const names = d.spec.template.spec.containers[0].env.map(e => e.name);
+    expect(names).not.toContain('ATE_API_ENDPOINT');
+    expect(names).not.toContain('AGORA_SYSTEM_OIDC_TOKEN_URL');
+    expect(names).not.toContain('KAGENT_PROBE_BASE_URL');
+  });
+
+  it('deploy() does not apply any RBAC objects', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.log = () => {};
+    await f.deploy();
+    expect(applied).not.toContain('ServiceAccount');
+    expect(applied).not.toContain('Role');
+    expect(applied).not.toContain('RoleBinding');
+  });
 });
 
 describe('agora-console with sourceRanges', () => {

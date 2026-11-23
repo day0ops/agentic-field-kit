@@ -1,0 +1,37 @@
+apiVersion: agentic.demo/v1
+kind: InfraProfile
+metadata:
+  name: eks-single-cluster-substrate
+  description: EKS single cluster (Kubernetes 1.37) for kagent Agent Substrate
+
+spec:
+  name: willow
+  provider: eks
+  environment: aws-dev
+
+  settings:
+    kubernetes_version: '1.37'
+    # Substrate needs certificates.k8s.io's PodCertificateRequest/ClusterTrustBundle,
+    # GA and on by default as of 1.37 -- no feature-gate/beta-API opt-in needed on EKS.
+    enable_workload_storage: true
+    workload_storage_force_destroy: true
+    workload_storage_ksa_namespace: ate-system
+    # ate-api-server also needs its own binding (manages golden-snapshot Tags directly),
+    # but the eks module's IRSA trust policy only supports a single KSA today, unlike
+    # gke-single-cluster-substrate's list -- atelet only until that's extended.
+    workload_storage_ksa_name: atelet
+
+    enable_node_sleep_schedule: true
+    node_sleep_cron: '30 18 * * MON-FRI'
+    node_wake_cron: '0 8 * * MON-FRI'
+    node_sleep_timezone: 'Pacific/Auckland'
+
+    nodes:
+      desired: 2
+      min: 0
+      type: t3.xlarge
+      private: true
+
+  clusters:
+    - name: demo
+      role: workload

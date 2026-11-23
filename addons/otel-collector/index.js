@@ -9,6 +9,9 @@ const DEFAULT_CHART_VERSION = '0.158.0';
 const OTEL_HELM_REPO = 'https://open-telemetry.github.io/opentelemetry-helm-charts';
 const RELEASE_NAME = 'otel-collector';
 const SERVICE_MONITOR_NAME = 'otel-collector-substrate-metrics';
+// Keep in sync with addons/kagent/index.js's CLICKHOUSE_CREDENTIALS_SECRET -- this addon
+// reads the same Secret the kagent addon generates, rather than assuming chart defaults.
+const CLICKHOUSE_CREDENTIALS_SECRET = 'kagent-clickhouse-credentials';
 
 /**
  * Minimal standalone OTel Collector that catches OTLP traces/metrics/logs from
@@ -53,10 +56,12 @@ export class OtelCollectorFeature extends AddonFeature {
       config.clickhouseHost || `kagent-clickhouse.${this.namespace}.svc.cluster.local`;
     this.clickhousePort = config.clickhousePort || 9000;
     this.clickhouseDatabase = config.clickhouseDatabase || 'kagent';
-    // Matches the kagent-enterprise chart's own default (enterprise.database.clickhouse.*);
-    // override here if that chart's password was changed from its default.
-    this.clickhouseUsername = config.clickhouseUsername || 'default';
-    this.clickhousePassword = config.clickhousePassword || 'password';
+    // Explicit overrides bypass the generated Secret this addon normally reads credentials
+    // from at deploy time (see _resolveClickhouseCredentials) -- e.g. for a BYO/external
+    // ClickHouse. Left null otherwise so buildValues() can tell "not yet resolved" apart
+    // from a real value.
+    this.clickhouseUsername = config.clickhouseUsername || null;
+    this.clickhousePassword = config.clickhousePassword || null;
     // Matches the kagent-ui chart's own default (EXTENSION_LOCAL_CLUSTER_NAME) --
     // override here if that chart's cluster name was changed from its default.
     this.clusterName = config.clusterName || 'mgmt-cluster';
@@ -87,6 +92,7 @@ export class OtelCollectorFeature extends AddonFeature {
   async deploy() {
     this.log(`Installing OTel Collector ${this.chartVersion} (ClickHouse exporter)...`, 'info');
 
+    await this._resolveClickhouseCredentials();
     await this.addHelmRepo();
     await this.installCollector();
     await this.waitForCollector();
@@ -98,6 +104,45 @@ export class OtelCollectorFeature extends AddonFeature {
     }
 
     this.log(`OTel Collector installed successfully. Endpoint: ${this.endpoint}`, 'success');
+  }
+
+  /**
+   * Decodes a `kubectl -o jsonpath='{.data.a}|{.data.b}'` result (base64-encoded Secret
+   * values, pipe-joined) into [a, b]. Returns null when either half is missing -- the Secret
+   * doesn't exist, or doesn't carry both keys.
+   */
+  _decodeSecretPair(stdout) {
+    const trimmed = (stdout || '').trim();
+    if (!trimmed.includes('|')) return null;
+    const [a, b] = trimmed.split('|');
+    if (!a || !b) return null;
+    return [Buffer.from(a, 'base64').toString('utf8'), Buffer.from(b, 'base64').toString('utf8')];
+  }
+
+  /**
+   * Reads the ClickHouse credential the kagent addon generated (see its own
+   * CLICKHOUSE_CREDENTIALS_SECRET) from the same namespace this collector installs into --
+   * both addons are expected to share a namespace (see this.namespace's doc comment). A
+   * no-op when an explicit clickhouseUsername/clickhousePassword override was already given.
+   */
+  async _resolveClickhouseCredentials() {
+    if (this.clickhouseUsername && this.clickhousePassword) return;
+
+    const ctxFlag = this.kubeContext ? `--context=${this.kubeContext}` : '';
+    const ctxStr = ctxFlag ? `${ctxFlag} ` : '';
+    const result = await CommandRunner.exec(
+      `kubectl ${ctxStr}get secret ${CLICKHOUSE_CREDENTIALS_SECRET} -n ${this.namespace} -o jsonpath="{.data.username}|{.data.password}" --ignore-not-found`,
+      { ignoreError: true }
+    );
+    const decoded = !result.exitCode && this._decodeSecretPair(result.stdout);
+    if (!decoded) {
+      this.log(
+        `ClickHouse credentials Secret '${CLICKHOUSE_CREDENTIALS_SECRET}' not found in namespace '${this.namespace}' -- falling back to the chart's own default/password. Deploy the kagent addon (which generates this Secret) first, or set clickhouseUsername/clickhousePassword explicitly.`,
+        'warn'
+      );
+      return;
+    }
+    [this.clickhouseUsername, this.clickhousePassword] = decoded;
   }
 
   async addHelmRepo() {
@@ -113,7 +158,11 @@ export class OtelCollectorFeature extends AddonFeature {
   }
 
   buildValues() {
-    const clickhouseEndpoint = `tcp://${this.clickhouseUsername}:${this.clickhousePassword}@${this.clickhouseHost}:${this.clickhousePort}?database=${this.clickhouseDatabase}`;
+    // Falls back to the chart's own default/password only when no explicit override and
+    // no resolved Secret exist yet (e.g. called directly, without deploy() having run).
+    const username = this.clickhouseUsername || 'default';
+    const password = this.clickhousePassword || 'password';
+    const clickhouseEndpoint = `tcp://${username}:${password}@${this.clickhouseHost}:${this.clickhousePort}?database=${this.clickhouseDatabase}`;
     const genaiEndpoint = `${clickhouseEndpoint}&dial_timeout=10s&enable_json_type=1`;
 
     return {

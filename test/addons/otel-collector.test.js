@@ -88,3 +88,47 @@ test('otel-collector runbook documents the Tempo and Prometheus exporters', asyn
   expect(md).toContain('ServiceMonitor');
   expect(md).toContain('otel-collector-substrate-metrics');
 });
+
+// ── ClickHouse credential resolution (reads the kagent addon's generated Secret) ────
+
+test('OtelCollectorFeature defaults clickhouseUsername/Password to null (resolved at deploy time)', () => {
+  const feature = new OtelCollectorFeature('otel-collector', {});
+  expect(feature.clickhouseUsername).toBeNull();
+  expect(feature.clickhousePassword).toBeNull();
+});
+
+test('OtelCollectorFeature respects explicit clickhouseUsername/Password overrides', () => {
+  const feature = new OtelCollectorFeature('otel-collector', {
+    clickhouseUsername: 'custom',
+    clickhousePassword: 'custom-pass',
+  });
+  expect(feature.clickhouseUsername).toBe('custom');
+  expect(feature.clickhousePassword).toBe('custom-pass');
+});
+
+test('buildValues falls back to the chart default when no credential has been resolved', () => {
+  const feature = new OtelCollectorFeature('otel-collector', {});
+  const values = feature.buildValues();
+  expect(values.config.exporters.clickhouse.endpoint).toContain('tcp://default:password@');
+});
+
+test('buildValues uses a resolved/explicit credential once set', () => {
+  const feature = new OtelCollectorFeature('otel-collector', {
+    clickhouseUsername: 'default',
+    clickhousePassword: 's3cr3t',
+  });
+  const values = feature.buildValues();
+  expect(values.config.exporters.clickhouse.endpoint).toContain('tcp://default:s3cr3t@');
+});
+
+test('_decodeSecretPair decodes a "b64|b64" jsonpath result', () => {
+  const feature = new OtelCollectorFeature('otel-collector', {});
+  const encoded = `${Buffer.from('default').toString('base64')}|${Buffer.from('s3cr3t').toString('base64')}`;
+  expect(feature._decodeSecretPair(encoded)).toEqual(['default', 's3cr3t']);
+});
+
+test('_decodeSecretPair returns null for empty or malformed content', () => {
+  const feature = new OtelCollectorFeature('otel-collector', {});
+  expect(feature._decodeSecretPair('')).toBeNull();
+  expect(feature._decodeSecretPair('no-pipe-here')).toBeNull();
+});

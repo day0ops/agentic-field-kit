@@ -25,6 +25,15 @@ const __dirname = path.dirname(__filename);
  *   listeners: array,             // Optional: Override default listeners
  * }
  */
+/** Removing a label a resource doesn't have is a no-op in kubectl; label/annotate don't support --ignore-not-found (that's a get/delete-only flag). */
+export function buildNamespaceLabelRemoveCommand(contextFlag, namespace) {
+  return `kubectl ${contextFlag}label namespace ${namespace} istio.io/use-waypoint-`;
+}
+
+export function buildServiceLabelRemoveCommand(contextFlag, serviceName, namespace) {
+  return `kubectl ${contextFlag}label service ${serviceName} -n ${namespace} istio.io/use-waypoint-`;
+}
+
 export class WaypointFeature extends Feature {
   validate() {
     if (!this.config.waypointName) {
@@ -144,17 +153,18 @@ export class WaypointFeature extends Feature {
         const target = this.config.labels.target || 'namespace';
         if (target === 'namespace') {
           try {
-            execSync(
-              `kubectl ${contextFlag}label namespace ${namespace} istio.io/use-waypoint- --ignore-not-found=true`,
-              { stdio: 'pipe' }
-            );
+            execSync(buildNamespaceLabelRemoveCommand(contextFlag, namespace), { stdio: 'pipe' });
           } catch {
             /* ignore */
           }
         } else if (target === 'service' && this.config.labels.serviceName) {
           try {
             execSync(
-              `kubectl ${contextFlag}label service ${this.config.labels.serviceName} -n ${namespace} istio.io/use-waypoint- --ignore-not-found=true`,
+              buildServiceLabelRemoveCommand(
+                contextFlag,
+                this.config.labels.serviceName,
+                namespace
+              ),
               { stdio: 'pipe' }
             );
           } catch {

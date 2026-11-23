@@ -81,6 +81,7 @@ export class FraudOpsConsoleFeature extends Feature {
     this.keycloakTlsEnabled = this.keycloak.tlsEnabled !== false;
     this.keycloakRealm = this.keycloak.realm || 'kagent';
     this.port = config.port || 8090;
+    this.secretName = 'fraud-ops-console-secrets';
   }
 
   getFeaturePath() {
@@ -172,6 +173,19 @@ export class FraudOpsConsoleFeature extends Feature {
     };
   }
 
+  buildSecret() {
+    return {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name: this.secretName, namespace: this.namespace },
+      type: 'Opaque',
+      stringData: {
+        'clickhouse-dsn': this.clickhouseDsn,
+        'client-secret': this.keycloak.clientSecret,
+      },
+    };
+  }
+
   buildDeployment() {
     return {
       apiVersion: 'apps/v1',
@@ -198,13 +212,19 @@ export class FraudOpsConsoleFeature extends Feature {
                   { name: 'ATE_API_ENDPOINT', value: this.ateApiEndpoint },
                   { name: 'ATE_NAMESPACE', value: this.namespace },
                   { name: 'WORKER_POOL_NAME', value: this.workerPoolName },
-                  { name: 'CLICKHOUSE_DSN', value: this.clickhouseDsn },
+                  {
+                    name: 'CLICKHOUSE_DSN',
+                    valueFrom: { secretKeyRef: { name: this.secretName, key: 'clickhouse-dsn' } },
+                  },
                   { name: 'KAGENT_GRPC_TARGET', value: this.kagentGrpcTarget },
                   { name: 'FRAUD_SWARM_HARNESS', value: this.harnessName },
                   { name: 'FRAUD_LEAD_AGENT_TEMPLATE', value: this.agentTemplateName },
                   { name: 'KEYCLOAK_TOKEN_URL', value: this.keycloakTokenUrl },
                   { name: 'KEYCLOAK_CLIENT_ID', value: this.keycloak.clientId },
-                  { name: 'KEYCLOAK_CLIENT_SECRET', value: this.keycloak.clientSecret },
+                  {
+                    name: 'KEYCLOAK_CLIENT_SECRET',
+                    valueFrom: { secretKeyRef: { name: this.secretName, key: 'client-secret' } },
+                  },
                 ],
               },
             ],
@@ -321,6 +341,7 @@ export class FraudOpsConsoleFeature extends Feature {
     await this.applyResource(this.buildRoleBinding());
     await this.applyResource(this.buildAteTokenRole());
     await this.applyResource(this.buildAteTokenRoleBinding());
+    await this.applyResource(this.buildSecret());
     await this.applyResource(this.buildDeployment());
     await this.applyResource(this.buildService());
     await this.applyResource(this.buildCertificate());
@@ -345,6 +366,7 @@ export class FraudOpsConsoleFeature extends Feature {
     await this.deleteResource('certificate', 'fraud-ops-console-tls', this.namespace);
     await this.deleteResource('service', 'fraud-ops-console', this.namespace);
     await this.deleteResource('deployment', 'fraud-ops-console', this.namespace);
+    await this.deleteResource('secret', this.secretName, this.namespace);
     await this.deleteResource('rolebinding', 'fraud-ops-console-ate-token', this.ateNamespace);
     await this.deleteResource('role', 'fraud-ops-console-ate-token', this.ateNamespace);
     await this.deleteResource('rolebinding', 'fraud-ops-console', this.namespace);

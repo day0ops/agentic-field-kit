@@ -10,16 +10,26 @@ import { Feature } from '../../../src/lib/feature.js';
  * exposure pattern (gatewayClassName: enterprise-agentgateway, ClusterIssuer:
  * letsencrypt-dns).
  *
- * Deliberately simpler than fraud-ops-console, not a direct copy: no
- * ServiceAccount/Role/RoleBinding, no Keycloak client-credentials wiring.
- * fraud-ops-console needs both because it queries kagent/Substrate CRDs
- * directly (live density telemetry) and calls kagent's gRPC API (real agent
- * invocation). agora-demo's console instead calls kagent Agents over A2A
- * through agentgateway as the logged-in visitor's own forwarded token (see
- * oidc-gateway/substrate-a2a-route/token-exchange-policy/kagent-rbac-policy
- * in the usecase spec) - no service-account identity needed here at all.
- * Its Operator Studio substrate section still always resolves an honest
- * empty state, making no live K8s API calls.
+ * Visitor chat calls kagent Agents over A2A through agentgateway as the
+ * logged-in visitor's own forwarded token (see oidc-gateway/substrate-a2a-
+ * route/token-exchange-policy/kagent-rbac-policy in the usecase spec) - no
+ * service-account identity needed for that path.
+ *
+ * Two optional, independently-opt-in capabilities add a ServiceAccount/RBAC
+ * and/or a Keycloak client-credentials identity when configured (presence
+ * triggers wiring, same convention as agentGatewayBaseUrl below - omitting
+ * both preserves this feature's original "no SA/RBAC at all" behavior):
+ * - `ateApiEndpoint` set: Operator Studio's "Agent Substrate" panel gets real
+ *   actor/worker-pool status (console/source.go shells out to kubectl-ate,
+ *   mirroring fraud-ops-console's own proven RBAC shape - a ServiceAccount in
+ *   this feature's namespace, plus a cross-namespace Role/RoleBinding in
+ *   ateNamespace granting serviceaccounts/token:create on ate-client).
+ * - `systemKeycloak` set: Operator Studio's isolation-check probe gets a real
+ *   client-credentials identity to call trust-safety/auto-bidder directly
+ *   in-cluster (never through the public agentgateway route those sub-agents
+ *   are deliberately never exposed on - see console/isolation_probe.go).
+ *   Needs no K8s RBAC of its own, only the Keycloak client (config/profiles
+ *   realm config) and a kagent-rbac-policy grant for its group.
  *
  * Deliberately a Feature, not an `extras/applications` entry, for the same
  * reason fraud-ops-console is: `requires.applications`' whole-namespace-delete
@@ -74,6 +84,39 @@ import { Feature } from '../../../src/lib/feature.js';
  *                              // of how many paths match it. '/account' is always included
  *                              // even if omitted here: every account handler already assumes
  *                              // oidc-gateway reaches it (see account_handlers.go).
+ *   ateApiEndpoint: string,    // Optional -- presence enables real Operator Studio substrate
+ *                              // status (ServiceAccount/RBAC, serviceAccountName, ATE_* env).
+ *                              // Omit to leave Operator Studio's Agent Substrate panel on its
+ *                              // honest-empty state.
+ *   ateNamespace: string,      // Default: 'ate-system' -- where the ate-client token-request
+ *                              // RBAC is granted (only relevant when ateApiEndpoint is set)
+ *   agentNamespace: string,    // Default: 'kagent-system' -- the kagent namespace the agents/
+ *                              // WorkerPool/atespace actually live in. NOT this feature's own
+ *                              // `namespace` (where the console itself is deployed) -- the two
+ *                              // are different concepts that only happen to coincide in
+ *                              // agora-demo-local today (final review finding #4). Drives both
+ *                              // AGORA_ATESPACE (deliberately not ATE_NAMESPACE -- kubectl-ate
+ *                              // itself reads ATE_NAMESPACE from its own process environment as
+ *                              // its control-plane target; reusing that name here would silently
+ *                              // redirect kubectl-ate away from the real ate-system control
+ *                              // plane) and kagentControllerBaseUrl's default below.
+ *   workerPoolName: string,    // Default: 'agora-workers' -- only relevant when ateApiEndpoint
+ *                              // is set
+ *   systemKeycloak: {          // Optional -- presence enables the Operator Studio isolation-
+ *                              // check probe's client-credentials identity. Omit to leave the
+ *                              // probe unconfigured (returns 501).
+ *     hostname: string,         // Required (within this block) -- Keycloak's PUBLIC hostname,
+ *                              // never an internal Service DNS name (same rule as every other
+ *                              // OIDC client in this repo - kagent-controller validates a
+ *                              // token's iss claim against its own configured public issuer).
+ *     realm: string,            // Default: 'kagent'
+ *     clientId: string,         // Required (within this block)
+ *     clientSecret: string,     // Required (within this block)
+ *   },
+ *   kagentControllerBaseUrl: string, // Optional -- the in-cluster URL the isolation probe
+ *                              // calls (never the public agentgateway-routed one trust-safety/
+ *                              // auto-bidder are deliberately never exposed on). Default:
+ *                              // http://kagent-controller.<agentNamespace>.svc.cluster.local:8083/agents/<agentNamespace>
  * }
  */
 export class AgoraConsoleFeature extends Feature {
@@ -92,6 +135,20 @@ export class AgoraConsoleFeature extends Feature {
     this.agentGatewayBaseUrl = config.agentGatewayBaseUrl || null;
     const extraGatedPaths = (config.gatedPaths || []).filter(p => p !== '/account');
     this.gatedPaths = ['/account', ...extraGatedPaths];
+
+    this.ateApiEndpoint = config.ateApiEndpoint || null;
+    this.ateNamespace = config.ateNamespace || 'ate-system';
+    // The agents' own namespace -- a different concept from this.namespace
+    // (where the console itself is deployed); only coincidentally the same
+    // value in agora-demo-local today.
+    this.agentNamespace = config.agentNamespace || 'kagent-system';
+    this.workerPoolName = config.workerPoolName || 'agora-workers';
+
+    this.systemKeycloak = config.systemKeycloak || null;
+    this.systemKeycloakSecretName = 'agora-console-system-keycloak';
+    this.kagentControllerBaseUrl =
+      config.kagentControllerBaseUrl ||
+      `http://kagent-controller.${this.agentNamespace}.svc.cluster.local:8083/agents/${this.agentNamespace}`;
   }
 
   getFeaturePath() {
@@ -102,7 +159,100 @@ export class AgoraConsoleFeature extends Feature {
     if (!this.catalogApiImage) throw new Error('agora-console: catalogApiImage is required');
     if (!this.consoleImage) throw new Error('agora-console: consoleImage is required');
     if (!this.hostname) throw new Error('agora-console: hostname is required');
+    if (this.systemKeycloak) {
+      if (!this.systemKeycloak.hostname)
+        throw new Error('agora-console: systemKeycloak.hostname is required');
+      if (!this.systemKeycloak.clientId)
+        throw new Error('agora-console: systemKeycloak.clientId is required');
+      if (!this.systemKeycloak.clientSecret)
+        throw new Error('agora-console: systemKeycloak.clientSecret is required');
+    }
     return true;
+  }
+
+  get systemKeycloakTokenUrl() {
+    const realm = this.systemKeycloak.realm || 'kagent';
+    return `https://${this.systemKeycloak.hostname}/realms/${realm}/protocol/openid-connect/token`;
+  }
+
+  // buildServiceAccount/buildRole/buildRoleBinding/buildAteTokenRole/
+  // buildAteTokenRoleBinding mirror fraud-ops-console's own RBAC methods of
+  // the same shape - only applied by deploy() when ateApiEndpoint is set
+  // (see the class doc comment).
+  buildServiceAccount() {
+    return {
+      apiVersion: 'v1',
+      kind: 'ServiceAccount',
+      metadata: { name: 'agora-console', namespace: this.namespace },
+    };
+  }
+
+  buildRole() {
+    return {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'Role',
+      metadata: { name: 'agora-console', namespace: this.namespace },
+      rules: [
+        {
+          apiGroups: ['kagent.dev', 'ate.dev'],
+          resources: ['agenttemplates', 'harnesses', 'workerpools'],
+          verbs: ['get', 'list', 'watch'],
+        },
+      ],
+    };
+  }
+
+  buildRoleBinding() {
+    return {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'RoleBinding',
+      metadata: { name: 'agora-console', namespace: this.namespace },
+      roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'agora-console' },
+      subjects: [{ kind: 'ServiceAccount', name: 'agora-console', namespace: this.namespace }],
+    };
+  }
+
+  // buildAteTokenRole/buildAteTokenRoleBinding grant this feature's own
+  // ServiceAccount permission to request a token for `ate-client` -- the
+  // identity kubectl-ate actually authenticates to ate-api as. Placed in
+  // ateNamespace, not this.namespace.
+  //
+  // This grants whatever `ate-client` itself is authorized for on ate-api,
+  // not narrowly "read-only actor/worker listing" -- the same characteristic
+  // the sibling fraud-ops-console feature already accepts (it mints an
+  // identically-scoped token). A public-facing console minting this token
+  // should be understood to carry `ate-client`'s full authorization, not a
+  // custom read-only grant -- flagged during final review, worth
+  // re-confirming `ate-client`'s own ate-api authorization scope before this
+  // feature is deployed anywhere with a lower trust bar than this demo.
+  buildAteTokenRole() {
+    return {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'Role',
+      metadata: { name: 'agora-console-ate-token', namespace: this.ateNamespace },
+      rules: [
+        {
+          apiGroups: [''],
+          resources: ['serviceaccounts/token'],
+          resourceNames: ['ate-client'],
+          verbs: ['create'],
+        },
+      ],
+    };
+  }
+
+  buildAteTokenRoleBinding() {
+    return {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'RoleBinding',
+      metadata: { name: 'agora-console-ate-token', namespace: this.ateNamespace },
+      roleRef: {
+        apiGroup: 'rbac.authorization.k8s.io',
+        kind: 'Role',
+        name: 'agora-console-ate-token',
+      },
+      subjects: [{ kind: 'ServiceAccount', name: 'agora-console', namespace: this.namespace }],
+    };
   }
 
   buildCatalogApiDeployment() {
@@ -151,6 +301,16 @@ export class AgoraConsoleFeature extends Feature {
     };
   }
 
+  buildSystemKeycloakSecret() {
+    return {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name: this.systemKeycloakSecretName, namespace: this.namespace },
+      type: 'Opaque',
+      stringData: { 'client-secret': this.systemKeycloak.clientSecret },
+    };
+  }
+
   buildConsoleDeployment() {
     return {
       apiVersion: 'apps/v1',
@@ -166,6 +326,7 @@ export class AgoraConsoleFeature extends Feature {
         template: {
           metadata: { labels: { app: 'console' } },
           spec: {
+            ...(this.ateApiEndpoint ? { serviceAccountName: 'agora-console' } : {}),
             containers: [
               {
                 name: 'console',
@@ -179,6 +340,32 @@ export class AgoraConsoleFeature extends Feature {
                   },
                   ...(this.agentGatewayBaseUrl
                     ? [{ name: 'AGENTGATEWAY_BASE_URL', value: this.agentGatewayBaseUrl }]
+                    : []),
+                  ...(this.ateApiEndpoint
+                    ? [
+                        { name: 'ATE_API_ENDPOINT', value: this.ateApiEndpoint },
+                        { name: 'AGORA_ATESPACE', value: this.agentNamespace },
+                        { name: 'ATE_WORKER_POOL_NAME', value: this.workerPoolName },
+                      ]
+                    : []),
+                  ...(this.systemKeycloak
+                    ? [
+                        { name: 'AGORA_SYSTEM_OIDC_TOKEN_URL', value: this.systemKeycloakTokenUrl },
+                        {
+                          name: 'AGORA_SYSTEM_OIDC_CLIENT_ID',
+                          value: this.systemKeycloak.clientId,
+                        },
+                        {
+                          name: 'AGORA_SYSTEM_OIDC_CLIENT_SECRET',
+                          valueFrom: {
+                            secretKeyRef: {
+                              name: this.systemKeycloakSecretName,
+                              key: 'client-secret',
+                            },
+                          },
+                        },
+                        { name: 'KAGENT_PROBE_BASE_URL', value: this.kagentControllerBaseUrl },
+                      ]
                     : []),
                 ],
                 readinessProbe: {
@@ -302,6 +489,16 @@ export class AgoraConsoleFeature extends Feature {
   }
 
   async deploy() {
+    if (this.ateApiEndpoint) {
+      await this.applyResource(this.buildServiceAccount());
+      await this.applyResource(this.buildRole());
+      await this.applyResource(this.buildRoleBinding());
+      await this.applyResource(this.buildAteTokenRole());
+      await this.applyResource(this.buildAteTokenRoleBinding());
+    }
+    if (this.systemKeycloak) {
+      await this.applyResource(this.buildSystemKeycloakSecret());
+    }
     await this.applyResource(this.buildCatalogApiDeployment());
     await this.applyResource(this.buildCatalogApiService());
     await this.applyResource(this.buildConsoleDeployment());
@@ -334,6 +531,16 @@ export class AgoraConsoleFeature extends Feature {
     await this.deleteResource('deployment', 'console', this.namespace);
     await this.deleteResource('service', 'catalog-api', this.namespace);
     await this.deleteResource('deployment', 'catalog-api', this.namespace);
+    if (this.systemKeycloak) {
+      await this.deleteResource('secret', this.systemKeycloakSecretName, this.namespace);
+    }
+    if (this.ateApiEndpoint) {
+      await this.deleteResource('rolebinding', 'agora-console-ate-token', this.ateNamespace);
+      await this.deleteResource('role', 'agora-console-ate-token', this.ateNamespace);
+      await this.deleteResource('rolebinding', 'agora-console', this.namespace);
+      await this.deleteResource('role', 'agora-console', this.namespace);
+      await this.deleteResource('serviceaccount', 'agora-console', this.namespace);
+    }
     this.log('agora-console cleaned up', 'success');
   }
 }

@@ -29,7 +29,7 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.3
+    version: v2026.11.1
 
   kagent:
     scheme: https

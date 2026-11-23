@@ -11,7 +11,7 @@ spec:
   # No infra: field - this is a bring-your-own cluster, installed via `base install --context`,
   # which bypasses infra-state resolution entirely. No {{infra.*}} tokens are used below.
   environment: local
-  gatewayApiVersion: v1.6.0
+  gatewayApiVersion: v1.6.3
 
   addons:
     - name: cert-manager
@@ -61,6 +61,7 @@ spec:
               - buyers
               - sellers
               - operators
+              - agora-system
             clients:
               - clientId: kagent-enterprise
                 type: confidential
@@ -118,6 +119,23 @@ spec:
                 # requested client".
                 clientAttributes:
                   standard.token.exchange.enabled: 'true'
+              # Agora Operator Studio's own system identity for the isolation-check probe
+              # (console/isolation_probe.go) - a client-credentials grant, never a visitor's
+              # forwarded token, since this is an operator-triggered platform check against
+              # trust-safety/auto-bidder directly, in-cluster (never through the public
+              # agentgateway route - see agora-console's kagentControllerBaseUrl).
+              - clientId: agora-console-system
+                type: confidential
+                clientSecret: agora-console-system-secret
+                flows:
+                  - service-account
+                groupMembership: true
+                audience: kagent-enterprise-api
+                # Puts the service-account's synthetic user into the agora-system group, so
+                # its client-credentials token carries a `groups` claim the new
+                # kagent-rbac-policy grant (agora-demo-local.yaml) can match - a plain
+                # serviceAccountsEnabled client has no group membership otherwise.
+                serviceAccountGroup: agora-system
               # Browser-facing agentgateway UI login; ID matches the chart's ui.oidc.clientId default.
               - clientId: enterprise-agentgateway-ui
                 type: public

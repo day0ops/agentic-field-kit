@@ -27,7 +27,6 @@ describe('fraud-ops-console', () => {
     expect(c.image).toContain('fraud-ops-console');
     expect(c.ports[0].containerPort).toBe(8090);
     const env = Object.fromEntries(c.env.map(e => [e.name, e.value]));
-    expect(env.CLICKHOUSE_DSN).toContain('kagent-clickhouse');
     expect(env.KAGENT_GRPC_TARGET).toBe('kagent-controller.kagent.svc.cluster.local:8083');
     expect(env.FRAUD_SWARM_HARNESS).toBe('fraud-swarm');
     expect(env.FRAUD_LEAD_AGENT_TEMPLATE).toBe('fraud-lead-investigator');
@@ -35,7 +34,52 @@ describe('fraud-ops-console', () => {
       'https://keycloak.agentic-demo-gke.kasunt.apac.fe.solo.io/realms/kagent/protocol/openid-connect/token'
     );
     expect(env.KEYCLOAK_CLIENT_ID).toBe('fraud-swarm-driver');
-    expect(env.KEYCLOAK_CLIENT_SECRET).toBe('fraud-swarm-driver-secret');
+  });
+
+  it('wires CLICKHOUSE_DSN and KEYCLOAK_CLIENT_SECRET from a Secret, not a plaintext value', () => {
+    const d = f.buildDeployment();
+    const c = d.spec.template.spec.containers[0];
+    const dsnEnv = c.env.find(e => e.name === 'CLICKHOUSE_DSN');
+    expect(dsnEnv.value).toBeUndefined();
+    expect(dsnEnv.valueFrom.secretKeyRef).toEqual({
+      name: 'fraud-ops-console-secrets',
+      key: 'clickhouse-dsn',
+    });
+    const secretEnv = c.env.find(e => e.name === 'KEYCLOAK_CLIENT_SECRET');
+    expect(secretEnv.value).toBeUndefined();
+    expect(secretEnv.valueFrom.secretKeyRef).toEqual({
+      name: 'fraud-ops-console-secrets',
+      key: 'client-secret',
+    });
+  });
+
+  it('builds a Secret holding the Clickhouse DSN and Keycloak client secret', () => {
+    const s = f.buildSecret();
+    expect(s.kind).toBe('Secret');
+    expect(s.metadata.name).toBe('fraud-ops-console-secrets');
+    expect(s.metadata.namespace).toBe('kagent');
+    expect(s.stringData).toEqual({
+      'clickhouse-dsn':
+        'tcp://default:password@kagent-clickhouse.kagent.svc.cluster.local:9000?database=kagent',
+      'client-secret': 'fraud-swarm-driver-secret',
+    });
+  });
+
+  it('deploy() applies the Secret before the Deployment', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.log = () => {};
+    await f.deploy();
+    expect(applied.indexOf('Secret')).toBeGreaterThanOrEqual(0);
+    expect(applied.indexOf('Secret')).toBeLessThan(applied.indexOf('Deployment'));
+  });
+
+  it('cleanup() deletes the Secret', async () => {
+    const deleted = [];
+    f.deleteResource = async kind => deleted.push(kind);
+    f.log = () => {};
+    await f.cleanup();
+    expect(deleted).toContain('secret');
   });
 
   it('requires keycloak client-credentials config', () => {

@@ -1,0 +1,178 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: eks-single-cluster-with-kagent-substrate
+  description: |
+    Single EKS cluster with kagent Enterprise + Agent Substrate
+    - keycloak OIDC login
+    - enterprise agentgateway
+    - telemetry
+
+spec:
+  infra: eks-single-cluster-substrate
+  environment: aws-dev
+  gatewayApiVersion: v1.6.3
+
+  addons:
+    - name: cert-manager
+      description: TLS certificate management (Let's Encrypt via Route53)
+      version: '{{env.addons.cert-manager.version}}'
+      namespace: cert-manager
+      config:
+        letsencrypt:
+          enabled: true
+          provider: route53
+          email: '{{env.acme.email}}'
+          region: '{{env.aws.region}}'
+
+    - name: external-dns
+      description: Automatic DNS record management via Route53
+      version: '{{env.addons.external-dns.version}}'
+      namespace: external-dns
+      config:
+        provider: route53
+        domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+        region: '{{env.aws.region}}'
+        txtOwnerId: '{{env.dns.txtOwnerId}}'
+
+    - name: agentgateway
+      description: AI Gateway Enterprise (GatewayClass + token exchange for kagent OIDC)
+      phase: post
+      namespace: agentgateway-system
+      version: '{{env.agentgateway.version}}'
+      config:
+        enterprise: true
+        tokenExchange:
+          enabled: true
+          issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+          jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+
+    - name: keycloak
+      description: Keycloak OIDC provider
+      phase: post
+      namespace: keycloak
+      keycloakImage: '{{env.keycloak.image}}'
+      config:
+        hostname: '{{env.domains.core.keycloak}}'
+        tls:
+          enabled: true
+          createCertificate: true
+          clusterIssuerName: letsencrypt-dns
+        realms:
+          - realm: kagent
+            groups:
+              - kagent-admins
+              - kagent-writers
+              - kagent-readers
+            clients:
+              - clientId: kagent-enterprise
+                type: confidential
+                clientSecret: kagent-enterprise-secret
+                flows:
+                  - authorization-code
+                groupMembership: true
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+                postLogoutRedirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+              - clientId: kagent-ui
+                type: public
+                flows:
+                  - authorization-code
+                clientAttributes:
+                  pkce.code.challenge.method: S256
+                groupMembership: true
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401, confirmed live.
+                audience: kagent-enterprise-api
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+              - clientId: fraud-swarm-driver
+                type: confidential
+                clientSecret: fraud-swarm-driver-secret
+                flows:
+                  - service-account
+                groupMembership: true
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401, confirmed live.
+                audience: kagent-enterprise-api
+                serviceAccountGroup: kagent-writers
+            users:
+              - username: kagent-admin
+                email: kagent-admin@example.com
+                firstName: Kagent
+                lastName: Admin
+                memberOf:
+                  - kagent-admins
+              - username: kagent-writer
+                email: kagent-writer@example.com
+                firstName: Kagent
+                lastName: Writer
+                memberOf:
+                  - kagent-writers
+              - username: kagent-reader
+                email: kagent-reader@example.com
+                firstName: Kagent
+                lastName: Reader
+                memberOf:
+                  - kagent-readers
+
+    - name: kagent
+      description: Solo Enterprise for kagent AI agent platform + Agent Substrate
+      phase: post
+      namespace: kagent-system
+      version: '{{env.kagent.version}}'
+      config:
+        enterprise: true
+        clusterName: mgmt-cluster
+        hostname: '{{env.domains.core.kagentUi}}'
+        gatewaySourceRanges: '{{env.security.vpnSourceRanges}}'
+        provider:
+          type: openAI
+        oidc:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientSecret: kagent-enterprise-secret
+        otel:
+          endpoint: otel-collector-opentelemetry-collector.kagent-system.svc.cluster.local:4317
+          captureSensitiveContent: false
+        substrate:
+          enabled: true
+          version: '{{env.substrate.version}}'
+          registry: '{{env.substrate.registry}}'
+          kubectlAteVersion: '{{env.substrate.kubectlAteVersion}}'
+          snapshots:
+            identityAnnotation:
+              key: '{{infra.clusters.demo.storage.identityAnnotationKey}}'
+              value: '{{infra.clusters.demo.storage.identityAnnotationValue}}'
+
+    - name: telemetry
+      description: Grafana + Tempo observability for kagent + Agent Substrate (no Loki)
+      phase: post
+      namespace: telemetry
+      chartVersions: '{{env.addons.telemetry}}'
+      config:
+        enableLogs: false
+        enableTraces: true
+        enableMetrics: true
+        installDashboards: true
+        dashboardCategories: ['agw', 'substrate']
+        installOtelCollectors: false
+        gatewayClassName: enterprise-agentgateway
+        sourceRanges: '{{env.security.vpnSourceRanges}}'
+        grafanaHostname: '{{env.domains.core.grafana}}'
+        grafanaTls:
+          enabled: true
+          secretName: grafana-tls
+          issuer: letsencrypt-dns
+
+    - name: otel-collector
+      description: Minimal OTel Collector catching kagent/substrate OTLP into kagent's ClickHouse, fanning traces/metrics to Grafana Tempo/Prometheus
+      phase: post
+      namespace: kagent-system
+      config:
+        clusterName: mgmt-cluster
+        telemetryNamespace: telemetry

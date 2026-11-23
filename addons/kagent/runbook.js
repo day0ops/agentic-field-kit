@@ -25,7 +25,11 @@ const SUBSTRATE_PODCERT_OCI =
 const SUBSTRATE_ATELET_OCI =
   'oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm/substrate-atelet';
 const RUSTFS_CREDENTIALS_SECRET = 'kagent-rustfs-credentials';
-const RUSTFS_DEFAULT_CREDENTIAL = 'rustfsadmin';
+const RUSTFS_DEFAULT_ACCESS_KEY = 'rustfsadmin';
+// Keep in sync with addons/kagent/index.js's CLICKHOUSE_CREDENTIALS_SECRET -- the
+// otel-collector addon reads this same Secret for its ClickHouse exporter credentials.
+const CLICKHOUSE_CREDENTIALS_SECRET = 'kagent-clickhouse-credentials';
+const CLICKHOUSE_DEFAULT_USERNAME = 'default';
 const SUBSTRATE_WORKER_IMAGE_REGISTRY = 'us-docker.pkg.dev/solo-public/substrate-enterprise';
 const SUBSTRATE_NAMESPACE = 'ate-system';
 const PODCERT_NAMESPACE = 'podcertificate-controller-system';
@@ -242,7 +246,14 @@ export async function generate(_subIndex, addonCfg, clusterName, _profile, env) 
       `  --set enterprise.ui.frontend.oidc.clientId="${uiClientId}"`,
       // Chart default reserves a full 2 CPUs for the bundled ClickHouse -- too much on a
       // single-node demo cluster. Limit stays at the chart default so it can still burst.
-      `  --set clickhouse.resources.requests.cpu=300m`
+      `  --set clickhouse.resources.requests.cpu=300m`,
+      // Server-side (clickhouse.auth.*) and client-side (enterprise.database.clickhouse.*)
+      // credentials must match -- generated once per install below, read back here rather
+      // than left at the chart's own well-known default/password.
+      `  --set-string clickhouse.auth.username="$CLICKHOUSE_USERNAME"`,
+      `  --set-string clickhouse.auth.password="$CLICKHOUSE_PASSWORD"`,
+      `  --set-string enterprise.database.clickhouse.username="$CLICKHOUSE_USERNAME"`,
+      `  --set-string enterprise.database.clickhouse.password="$CLICKHOUSE_PASSWORD"`
     );
   } else if (enterprise) {
     controllerArgs.push(
@@ -353,6 +364,7 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
 
   const crdsStep = nextStep();
   const substrateStep = substrateEnabled ? nextStep() : null;
+  const clickhouseCredentialsStep = isAlphaChart ? nextStep() : null;
   const oidcSecretStep = isAlphaChart && oidcIssuer && clientSecret ? nextStep() : null;
   const uiExposureStep = uiExposureEnabled ? nextStep() : null;
   const controllerStep = nextStep();
@@ -380,6 +392,11 @@ kubectl label namespace $KAGENT_NAMESPACE istio.io/dataplane-mode=ambient --over
       'atelet:',
       '  enabled: false',
       ...(substrateSnapshotBackend === 'gcs' ? ['  storageBackend: gcs'] : []),
+      // Must match the Secret the atelet chart's own credentialsSecret reads below --
+      // generated once per install (see the RustFS credential step above this file).
+      ...(substrateSnapshotBackend === 'gcs'
+        ? []
+        : ['rustfs:', '  accessKey: "$RUSTFS_ACCESS_KEY"', '  secretKey: "$RUSTFS_SECRET_KEY"']),
       'credentialProvider:',
       '  namespacePolicies:',
       '    - atespace: $KAGENT_NAMESPACE',
@@ -593,7 +610,30 @@ helm upgrade --install substrate-crds \\
   --kube-context ${ctx}
 \`\`\`
 
-Install the standalone substrate release. \`--wait=false\` is intentional -- the chart doesn't
+${
+  substrateSnapshotBackend === 'gcs'
+    ? ''
+    : `Generate (once) the RustFS credential both the main substrate release's own
+\`rustfs.secretKey\` (below) and the atelet chart's \`credentialsSecret\` must agree on --
+idempotent, reads back an existing Secret rather than rotating a live credential on redeploy:
+
+\`\`\`bash
+RUSTFS_CREDS=$(kubectl --context ${ctx} get secret ${RUSTFS_CREDENTIALS_SECRET} -n $SUBSTRATE_NAMESPACE \\
+  -o jsonpath='{.data.AWS_ACCESS_KEY_ID}|{.data.AWS_SECRET_ACCESS_KEY}' --ignore-not-found)
+if [ -n "$RUSTFS_CREDS" ]; then
+  RUSTFS_ACCESS_KEY=$(echo "$RUSTFS_CREDS" | cut -d'|' -f1 | base64 --decode)
+  RUSTFS_SECRET_KEY=$(echo "$RUSTFS_CREDS" | cut -d'|' -f2 | base64 --decode)
+else
+  RUSTFS_ACCESS_KEY=${RUSTFS_DEFAULT_ACCESS_KEY}
+  RUSTFS_SECRET_KEY=$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')
+  kubectl --context ${ctx} create secret generic ${RUSTFS_CREDENTIALS_SECRET} -n $SUBSTRATE_NAMESPACE \\
+    --from-literal=AWS_ACCESS_KEY_ID=$RUSTFS_ACCESS_KEY --from-literal=AWS_SECRET_ACCESS_KEY="$RUSTFS_SECRET_KEY" \\
+    --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+fi
+\`\`\`
+
+`
+}Install the standalone substrate release. \`--wait=false\` is intentional -- the chart doesn't
 create the cryptographic Secrets its pods need to become Ready; those come next.
 
 \`\`\`bash
@@ -615,21 +655,10 @@ Install the standalone Agent Substrate Atelet release -- split out of the main s
 of substrate 1.0.0 GA (the main chart's own \`atelet.enabled\` is deprecated-but-still-true-by-
 default; new installs set it false, as above, and run this chart instead). Must come after
 substrate's first pass above (needs its "atelet" ServiceAccount name) and before the workload-
-identity annotation below. RustFS's bundled \`accessKey\`/\`secretKey\` are a fixed chart default
-(\`${RUSTFS_DEFAULT_CREDENTIAL}\`/\`${RUSTFS_DEFAULT_CREDENTIAL}\`), not generated per install, so this
-secret can be created directly rather than read back from a live release:
+identity annotation below:
 
 \`\`\`bash
-${
-  substrateSnapshotBackend === 'gcs'
-    ? ''
-    : `kubectl --context ${ctx} create secret generic ${RUSTFS_CREDENTIALS_SECRET} -n $SUBSTRATE_NAMESPACE \\
-  --from-literal=AWS_ACCESS_KEY_ID=${RUSTFS_DEFAULT_CREDENTIAL} \\
-  --from-literal=AWS_SECRET_ACCESS_KEY=${RUSTFS_DEFAULT_CREDENTIAL} \\
-  --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
-
-`
-}cat > substrate-atelet-values.yaml <<'EOF'
+cat > substrate-atelet-values.yaml <<'EOF'
 preview:
 ${SUBSTRATE_PREVIEW_GATES.map(gate => `  - ${gate}`).join('\n')}
 objectStore:
@@ -746,6 +775,31 @@ for d in ate-api-server ate-controller atenet-router atenet-egress k8s-credentia
   kubectl --context ${ctx} rollout status deploy/$d -n $SUBSTRATE_NAMESPACE --timeout=300s
 done
 kubectl --context ${ctx} rollout status ds/atelet -n $SUBSTRATE_NAMESPACE --timeout=300s
+\`\`\`
+
+`;
+  }
+
+  let clickhouseCredentialsBlock = '';
+  if (clickhouseCredentialsStep) {
+    clickhouseCredentialsBlock = `**Step ${clickhouseCredentialsStep} - Generate ClickHouse credentials:**
+
+Idempotent: reads back an existing Secret rather than rotating a live credential on redeploy.
+The otel-collector addon reads this same Secret for its ClickHouse exporter credentials.
+
+\`\`\`bash
+CLICKHOUSE_CREDS=$(kubectl --context ${ctx} get secret ${CLICKHOUSE_CREDENTIALS_SECRET} -n $KAGENT_NAMESPACE \\
+  -o jsonpath='{.data.username}|{.data.password}' --ignore-not-found)
+if [ -n "$CLICKHOUSE_CREDS" ]; then
+  CLICKHOUSE_USERNAME=$(echo "$CLICKHOUSE_CREDS" | cut -d'|' -f1 | base64 --decode)
+  CLICKHOUSE_PASSWORD=$(echo "$CLICKHOUSE_CREDS" | cut -d'|' -f2 | base64 --decode)
+else
+  CLICKHOUSE_USERNAME=${CLICKHOUSE_DEFAULT_USERNAME}
+  CLICKHOUSE_PASSWORD=$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')
+  kubectl --context ${ctx} create secret generic ${CLICKHOUSE_CREDENTIALS_SECRET} -n $KAGENT_NAMESPACE \\
+    --from-literal=username=$CLICKHOUSE_USERNAME --from-literal=password="$CLICKHOUSE_PASSWORD" \\
+    --dry-run=client -o yaml | kubectl --context ${ctx} apply -f -
+fi
 \`\`\`
 
 `;
@@ -1005,7 +1059,7 @@ ${ambientBlock}**Step ${crdsStep} — Install kagent CRDs:**
 ${crdsCmd}
 \`\`\`
 
-${substrateBlock}${oidcSecretBlock}${uiExposureBlock}**Step ${controllerStep} — Install kagent controller:**
+${substrateBlock}${clickhouseCredentialsBlock}${oidcSecretBlock}${uiExposureBlock}**Step ${controllerStep} — Install kagent controller:**
 
 \`\`\`bash
 ${controllerCmd}

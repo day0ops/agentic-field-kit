@@ -28,6 +28,64 @@ import { CommandRunner } from '../../../src/lib/common.js';
  *                                 //   [{deployment, container, env: {KEY: value}}]
  * }
  */
+function contextArgs(context) {
+  return context ? [`--context=${context}`] : [];
+}
+
+/** Each key=value pair is its own argv element, so label/annotation values containing spaces or shell metacharacters pass through intact. */
+export function buildServiceLabelArgs(context, namespace, serviceName, labels) {
+  const pairs = Object.entries(labels).map(([k, v]) => `${k}=${v}`);
+  return [
+    ...contextArgs(context),
+    'label',
+    'service',
+    serviceName,
+    '-n',
+    namespace,
+    ...pairs,
+    '--overwrite',
+  ];
+}
+
+export function buildServiceAnnotationArgs(context, namespace, serviceName, annotations) {
+  const pairs = Object.entries(annotations).map(([k, v]) => `${k}=${v}`);
+  return [
+    ...contextArgs(context),
+    'annotate',
+    'service',
+    serviceName,
+    '-n',
+    namespace,
+    ...pairs,
+    '--overwrite',
+  ];
+}
+
+/** Removing a label/annotation a resource doesn't have is a no-op in kubectl; label/annotate don't support --ignore-not-found (that's a get/delete-only flag). */
+export function buildServiceLabelRemoveArgs(context, namespace, serviceName, keys) {
+  return [
+    ...contextArgs(context),
+    'label',
+    'service',
+    serviceName,
+    '-n',
+    namespace,
+    ...keys.map(k => `${k}-`),
+  ];
+}
+
+export function buildServiceAnnotationRemoveArgs(context, namespace, serviceName, keys) {
+  return [
+    ...contextArgs(context),
+    'annotate',
+    'service',
+    serviceName,
+    '-n',
+    namespace,
+    ...keys.map(k => `${k}-`),
+  ];
+}
+
 export class GlobalServiceFeature extends Feature {
   validate() {
     if (!this.config.namespace) {
@@ -90,13 +148,11 @@ export class GlobalServiceFeature extends Feature {
         }
 
         if (svc.labels && Object.keys(svc.labels).length > 0) {
-          const labelArgs = Object.entries(svc.labels)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(' ');
           this.log(`Labeling service ${svc.name} with extra labels${contextInfo}...`, 'info');
           try {
-            await CommandRunner.exec(
-              `kubectl ${contextFlag} label service ${svc.name} -n ${namespace} ${labelArgs} --overwrite`
+            await CommandRunner.run(
+              'kubectl',
+              buildServiceLabelArgs(context, namespace, svc.name, svc.labels)
             );
           } catch (error) {
             this.log(
@@ -107,13 +163,11 @@ export class GlobalServiceFeature extends Feature {
         }
 
         if (svc.annotations && Object.keys(svc.annotations).length > 0) {
-          const annotationArgs = Object.entries(svc.annotations)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(' ');
           this.log(`Annotating service ${svc.name}${contextInfo}...`, 'info');
           try {
-            await CommandRunner.exec(
-              `kubectl ${contextFlag} annotate service ${svc.name} -n ${namespace} ${annotationArgs} --overwrite`
+            await CommandRunner.run(
+              'kubectl',
+              buildServiceAnnotationArgs(context, namespace, svc.name, svc.annotations)
             );
           } catch (error) {
             this.log(`Warning: Could not annotate service ${svc.name}: ${error.message}`, 'warn');
@@ -158,20 +212,19 @@ export class GlobalServiceFeature extends Feature {
 
       for (const svc of services) {
         try {
-          await CommandRunner.exec(
-            `kubectl ${contextFlag} label service ${svc.name} -n ${namespace} solo.io/service-scope- --ignore-not-found=true`
+          await CommandRunner.run(
+            'kubectl',
+            buildServiceLabelRemoveArgs(context, namespace, svc.name, ['solo.io/service-scope'])
           );
         } catch {
           /* ignore */
         }
 
         if (svc.labels && Object.keys(svc.labels).length > 0) {
-          const labelKeys = Object.keys(svc.labels)
-            .map(k => `${k}-`)
-            .join(' ');
           try {
-            await CommandRunner.exec(
-              `kubectl ${contextFlag} label service ${svc.name} -n ${namespace} ${labelKeys} --ignore-not-found=true`
+            await CommandRunner.run(
+              'kubectl',
+              buildServiceLabelRemoveArgs(context, namespace, svc.name, Object.keys(svc.labels))
             );
           } catch {
             /* ignore */
@@ -179,12 +232,15 @@ export class GlobalServiceFeature extends Feature {
         }
 
         if (svc.annotations && Object.keys(svc.annotations).length > 0) {
-          const annotationKeys = Object.keys(svc.annotations)
-            .map(k => `${k}-`)
-            .join(' ');
           try {
-            await CommandRunner.exec(
-              `kubectl ${contextFlag} annotate service ${svc.name} -n ${namespace} ${annotationKeys} --ignore-not-found=true`
+            await CommandRunner.run(
+              'kubectl',
+              buildServiceAnnotationRemoveArgs(
+                context,
+                namespace,
+                svc.name,
+                Object.keys(svc.annotations)
+              )
             );
           } catch {
             /* ignore */

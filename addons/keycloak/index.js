@@ -435,8 +435,6 @@ export class KeycloakFeature extends AddonFeature {
     };
 
     await execInPg('CREATE DATABASE keycloak;');
-    await execInPg("CREATE USER keycloak WITH PASSWORD 'password';");
-    await execInPg('GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;');
   }
 
   async waitForKeycloak() {
@@ -2015,13 +2013,16 @@ export class KeycloakFeature extends AddonFeature {
           `${baseUrl}/realms/master/protocol/openid-connect/token`,
           '-H',
           'Content-Type: application/x-www-form-urlencoded',
-          '-d',
-          `username=${encodeURIComponent(this.adminUsername)}&password=${encodeURIComponent(this.adminPassword)}&grant_type=password&client_id=admin-cli`,
+          '--data',
+          '@-',
         ];
+        const body = `username=${encodeURIComponent(this.adminUsername)}&password=${encodeURIComponent(this.adminPassword)}&grant_type=password&client_id=admin-cli`;
         this.log(`getAdminToken attempt ${i + 1}`, 'debug');
 
-        const result = await CommandRunner.run('curl', curlArgs, { ignoreError: true });
-        this.log(`getAdminToken stdout=${result.stdout?.substring(0, 200)}`, 'debug');
+        const result = await CommandRunner.run('curl', curlArgs, {
+          ignoreError: true,
+          input: body,
+        });
 
         if (result.stdout) {
           const parsed = JSON.parse(result.stdout);

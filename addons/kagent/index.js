@@ -1,6 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { unlink, writeFile } from 'fs/promises';
+import { unlink, writeFile, mkdir, chmod, rename, readFile, stat } from 'fs/promises';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import yaml from 'js-yaml';
 import { AddonFeature } from '../../src/lib/feature.js';
@@ -52,12 +53,17 @@ const SUBSTRATE_CRDS_RELEASE = 'substrate-crds';
 // atelet.enabled is now deprecated-but-still-true-by-default, and new installs are expected to
 // set it false and run this chart instead (confirmed from the chart's own values.yaml comment).
 const SUBSTRATE_ATELET_RELEASE = 'substrate-atelet';
-// RustFS (the bundled, in-cluster S3-compatible object store) ships with a fixed, non-generated
-// admin/admin-style default (rustfs.accessKey/secretKey in the main substrate chart's own
-// values.yaml) -- not a per-install secret, so the atelet chart's own credentialsSecret can be
-// created from this literal rather than read back from a live release.
+// Secret holding a per-install generated credential for the bundled RustFS object store
+// (main substrate chart's rustfs.accessKey/secretKey), read back by both the substrate
+// release itself and the atelet chart's own credentialsSecret -- see _ensureRustfsCredentials.
 const RUSTFS_CREDENTIALS_SECRET = 'kagent-rustfs-credentials';
-const RUSTFS_DEFAULT_CREDENTIAL = 'rustfsadmin';
+const RUSTFS_DEFAULT_ACCESS_KEY = 'rustfsadmin';
+// Secret holding a per-install generated credential for the bundled ClickHouse instance
+// (clickhouse.auth.* server-side, enterprise.database.clickhouse.* client-side on the alpha
+// chart) -- see _ensureClickhouseCredentials. Same Secret the otel-collector addon reads to
+// stay in sync, since it writes telemetry into the same ClickHouse instance.
+const CLICKHOUSE_CREDENTIALS_SECRET = 'kagent-clickhouse-credentials';
+const CLICKHOUSE_DEFAULT_USERNAME = 'default';
 const SUBSTRATE_NAMESPACE = 'ate-system';
 const PODCERT_NAMESPACE = 'podcertificate-controller-system';
 // Standalone, once-per-cluster release: answers PodCertificateRequests for the
@@ -603,6 +609,10 @@ export class KagentFeature extends AddonFeature {
       // env var the agentgateway addon itself already uses successfully.
       const substrateLicenseKey = process.env.ENTERPRISE_AGENTGATEWAY_LICENSE;
       await this._ensureAteSystemNamespace();
+      // Generated (or read back) before either install -- both the main release's own
+      // rustfs.accessKey/secretKey and the atelet chart's credentialsSecret must agree.
+      const rustfsBundled = this.substrate.snapshots.backend !== 'gcs';
+      const rustfsCreds = rustfsBundled ? await this._ensureRustfsCredentials() : null;
       const atePath = await this._ensureKubectlAte();
       // Must exist before any substrate pod is created -- its pods request certificates
       // immediately on creation, even with the first install below's --wait=false.
@@ -614,7 +624,7 @@ export class KagentFeature extends AddonFeature {
       // Postgres with its own schema/roles -- must exist before the controller is installed.
       await this._wireKagentControllerPostgres();
       await this._installSubstrateCrds(helmCtxArgs);
-      await this._installSubstrateRelease(helmCtxArgs, substrateLicenseKey);
+      await this._installSubstrateRelease(helmCtxArgs, substrateLicenseKey, { rustfsCreds });
       // Must land after substrate's first pass (its "atelet" ServiceAccount is what gets
       // annotated next) but can run before crypto bootstrap -- atelet only depends on the pod
       // certificate controller (already installed above), not the JWT/CA pools.
@@ -624,9 +634,15 @@ export class KagentFeature extends AddonFeature {
       // Re-apply with the same values now that the crypto pools/authentication ConfigMap
       // exist, so pods that were waiting on that material pick it up -- the first install
       // above runs before any of it exists (--wait=false there; --wait here).
-      await this._installSubstrateRelease(helmCtxArgs, substrateLicenseKey, { wait: true });
+      await this._installSubstrateRelease(helmCtxArgs, substrateLicenseKey, {
+        wait: true,
+        rustfsCreds,
+      });
       await this._waitForSubstrateReady();
     }
+
+    // Alpha chart only: bundles its own ClickHouse (see CLICKHOUSE_CREDENTIALS_SECRET).
+    const clickhouseCreds = this.isAlphaChart ? await this._ensureClickhouseCredentials() : null;
 
     // Alpha chart: the OIDC secretRef and the UI's Gateway/Certificate must exist before
     // the controller renders enterprise.oidc.secretRef / ui.httpRoute.parentRefs below.
@@ -685,7 +701,24 @@ export class KagentFeature extends AddonFeature {
         // Chart default reserves a full 2 CPUs for the bundled ClickHouse -- too much on a
         // single-node demo cluster. Limit stays at the chart default so it can still burst.
         '--set',
-        'clickhouse.resources.requests.cpu=300m'
+        'clickhouse.resources.requests.cpu=300m',
+        // Server-side (clickhouse.auth.*), controller-side (enterprise.database.clickhouse.*),
+        // and the chart's own bundled telemetry collector (telemetry.clickhouse.*) must all
+        // agree -- generated once per install, see _ensureClickhouseCredentials. ent_validation.yaml
+        // fails the install otherwise (telemetry.clickhouse.* defaults to the chart's own
+        // hardcoded password, which never matches a freshly generated one).
+        '--set-string',
+        `clickhouse.auth.username=${clickhouseCreds.username}`,
+        '--set-string',
+        `clickhouse.auth.password=${clickhouseCreds.password}`,
+        '--set-string',
+        `enterprise.database.clickhouse.username=${clickhouseCreds.username}`,
+        '--set-string',
+        `enterprise.database.clickhouse.password=${clickhouseCreds.password}`,
+        '--set-string',
+        `telemetry.clickhouse.username=${clickhouseCreds.username}`,
+        '--set-string',
+        `telemetry.clickhouse.password=${clickhouseCreds.password}`
       );
 
       if (this.oidcIssuer) {
@@ -927,14 +960,46 @@ export class KagentFeature extends AddonFeature {
   }
 
   /**
-   * Download URL for the kubectl-ate CLI release asset matching this platform.
+   * kubectl-ate release asset name matching this platform.
    */
-  _kubectlAteDownloadUrl() {
+  _kubectlAteAssetName() {
     const osMap = { darwin: 'darwin', linux: 'linux' };
     const archMap = { x64: 'amd64', arm64: 'arm64' };
     const os = osMap[process.platform] || process.platform;
     const arch = archMap[process.arch] || process.arch;
-    return `https://github.com/kagent-dev/substrate/releases/download/${this.substrate.kubectlAteVersion}/kubectl-ate-${os}-${arch}`;
+    return `kubectl-ate-${os}-${arch}`;
+  }
+
+  /**
+   * Download URL for the kubectl-ate CLI release asset matching this platform.
+   */
+  _kubectlAteDownloadUrl() {
+    return `https://github.com/kagent-dev/substrate/releases/download/${this.substrate.kubectlAteVersion}/${this._kubectlAteAssetName()}`;
+  }
+
+  /**
+   * URL for the per-asset SHA256 checksum file substrate publishes alongside each
+   * kubectl-ate binary (confirmed against the v1.0.0 release assets).
+   */
+  _kubectlAteChecksumUrl() {
+    return `${this._kubectlAteDownloadUrl()}.sha256`;
+  }
+
+  /**
+   * Extracts a SHA256 hex digest from a checksum file's contents. Accepts both the
+   * `sha256sum`-style "<hex>  <filename>" format and a bare hex digest, and matches
+   * against filename when one is present (a multi-asset checksums.txt would list more
+   * than one line).
+   */
+  _parseSha256Checksum(content, filename) {
+    if (!content) return null;
+    for (const line of content.split('\n')) {
+      const match = line.trim().match(/^([0-9a-fA-F]{64})(?:\s+\*?(.+))?$/);
+      if (!match) continue;
+      if (match[2] && filename && match[2].trim() !== filename) continue;
+      return match[1].toLowerCase();
+    }
+    return null;
   }
 
   /**
@@ -1129,30 +1194,14 @@ export class KagentFeature extends AddonFeature {
    * chart as of substrate 1.0.0 GA (see SUBSTRATE_ATELET_RELEASE). Must land after substrate's
    * first pass (needs the namespace + the "atelet" ServiceAccount name the main chart's prior
    * bundled atelet already established) and before _ensureAteletWorkloadIdentity, which
-   * annotates that same ServiceAccount.
+   * annotates that same ServiceAccount. Assumes RUSTFS_CREDENTIALS_SECRET already exists
+   * (see _ensureRustfsCredentials, called before this in _deployEnterprise).
    */
   async _installSubstrateAtelet(helmCtxArgs) {
     const ateNs = this.substrate.namespace;
-    const ctxFlag = this.kubeContext ? `--context=${this.kubeContext}` : '';
-    const ctxStr = ctxFlag ? `${ctxFlag} ` : '';
     const bundled = this.substrate.snapshots.backend !== 'gcs';
 
     this.log(`Installing Agent Substrate Atelet ${this.substrate.version}`);
-
-    if (bundled) {
-      const result = await CommandRunner.exec(
-        `kubectl ${ctxStr}create secret generic ${RUSTFS_CREDENTIALS_SECRET} -n ${ateNs} ` +
-          `--from-literal=AWS_ACCESS_KEY_ID=${RUSTFS_DEFAULT_CREDENTIAL} ` +
-          `--from-literal=AWS_SECRET_ACCESS_KEY=${RUSTFS_DEFAULT_CREDENTIAL} ` +
-          `--dry-run=client -o yaml | kubectl ${ctxStr}apply -f -`,
-        { ignoreError: true }
-      );
-      if (result.exitCode) {
-        throw new Error(
-          `Failed to reconcile ${RUSTFS_CREDENTIALS_SECRET}: ${result.stderr?.trim()}`
-        );
-      }
-    }
 
     const values = {
       preview: SUBSTRATE_PREVIEW_GATES,
@@ -1209,9 +1258,14 @@ export class KagentFeature extends AddonFeature {
    * its own pods need to become Ready (see _bootstrapSubstrateCrypto, called right after);
    * then again with wait=true once that material exists, matching
    * docs.solo.io/kagent/1.0.x/setup/installation/'s documented re-rollout step, so pods
-   * that were waiting on it pick it up.
+   * that were waiting on it pick it up. rustfsCreds (generated by _ensureRustfsCredentials)
+   * is null when the snapshot backend is gcs.
    */
-  async _installSubstrateRelease(helmCtxArgs, licenseKey, { wait = false } = {}) {
+  async _installSubstrateRelease(
+    helmCtxArgs,
+    licenseKey,
+    { wait = false, rustfsCreds = null } = {}
+  ) {
     this.log(`Installing Agent Substrate ${this.substrate.version}`);
 
     const values = {
@@ -1264,6 +1318,10 @@ export class KagentFeature extends AddonFeature {
       // overwriting the whole object silently re-enables the deprecated bundled atelet path,
       // conflicting with the separate substrate-atelet release.
       values.atelet.storageBackend = 'gcs';
+    } else if (rustfsCreds) {
+      // Must match the Secret the atelet chart's own credentialsSecret reads (see
+      // _installSubstrateAtelet) -- the bundled RustFS server itself is configured here.
+      values.rustfs = { accessKey: rustfsCreds.accessKey, secretKey: rustfsCreds.secretKey };
     }
 
     const valuesFile = path.join(tmpdir(), `substrate-values-${Date.now()}.yaml`);
@@ -1345,12 +1403,23 @@ export class KagentFeature extends AddonFeature {
    * Download kubectl-ate (idempotent -- reuses a cached, version-named binary
    * across runs) and return its path. Used to bootstrap the cryptographic
    * pools the substrate chart deliberately doesn't create.
+   *
+   * The cache dir is per-uid and mode 0700 so another local user can't plant a binary
+   * at this (otherwise predictable) path ahead of us, and the download is verified
+   * against substrate's published per-asset SHA256 before it's ever executed.
    */
   async _ensureKubectlAte() {
-    const workDir = path.join(tmpdir(), 'agentic-kubectl-ate');
-    const atePath = path.join(workDir, `kubectl-ate-${this.substrate.kubectlAteVersion}`);
+    const workDir = path.join(tmpdir(), `agentic-kubectl-ate-${process.getuid()}`);
+    await mkdir(workDir, { recursive: true, mode: 0o700 });
+    const workDirStat = await stat(workDir);
+    if (workDirStat.uid !== process.getuid()) {
+      throw new Error(
+        `Refusing to use kubectl-ate cache dir ${workDir}: owned by a different user`
+      );
+    }
+    await chmod(workDir, 0o700);
 
-    await CommandRunner.exec(`mkdir -p "${workDir}"`, { ignoreError: true });
+    const atePath = path.join(workDir, `kubectl-ate-${this.substrate.kubectlAteVersion}`);
 
     const check = await CommandRunner.exec(`"${atePath}" --help`, { ignoreError: true });
     if (!check.exitCode) {
@@ -1363,13 +1432,44 @@ export class KagentFeature extends AddonFeature {
 
     this.log(`Downloading kubectl-ate ${this.substrate.kubectlAteVersion}`);
     const url = this._kubectlAteDownloadUrl();
-    const download = await CommandRunner.exec(`curl -fsSL -o "${atePath}" "${url}"`, {
+    const checksumUrl = this._kubectlAteChecksumUrl();
+    const checksumResult = await CommandRunner.exec(`curl -fsSL "${checksumUrl}"`, {
+      ignoreError: true,
+    });
+    if (checksumResult.exitCode) {
+      throw new Error(
+        `Failed to download kubectl-ate checksum from ${checksumUrl}: ${checksumResult.stderr?.trim()}`
+      );
+    }
+    const expectedHex = this._parseSha256Checksum(
+      checksumResult.stdout,
+      this._kubectlAteAssetName()
+    );
+    if (!expectedHex) {
+      throw new Error(`No valid SHA256 checksum found at ${checksumUrl}`);
+    }
+
+    const downloadPath = `${atePath}.download`;
+    const download = await CommandRunner.exec(`curl -fsSL -o "${downloadPath}" "${url}"`, {
       ignoreError: true,
     });
     if (download.exitCode) {
+      await unlink(downloadPath).catch(() => {});
       throw new Error(`Failed to download kubectl-ate from ${url}: ${download.stderr?.trim()}`);
     }
-    await CommandRunner.exec(`chmod +x "${atePath}"`, { ignoreError: true });
+
+    const actualHex = createHash('sha256')
+      .update(await readFile(downloadPath))
+      .digest('hex');
+    if (actualHex !== expectedHex) {
+      await unlink(downloadPath).catch(() => {});
+      throw new Error(
+        `kubectl-ate checksum mismatch for ${url}: expected ${expectedHex}, got ${actualHex}`
+      );
+    }
+
+    await chmod(downloadPath, 0o700);
+    await rename(downloadPath, atePath);
     return atePath;
   }
 
@@ -2151,5 +2251,102 @@ ${inClusterAuthLines}`;
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
     return Buffer.from(bytes).toString('base64').slice(0, 32);
+  }
+
+  /**
+   * Random credential for generated Secrets (RustFS/ClickHouse). base64url rather than
+   * plain base64 -- no '/', '+', or padding '=' to collide with shell quoting (these values
+   * flow through CommandRunner.exec shell strings) or a clickhouse:// DSN.
+   */
+  _randomCredential(byteLength = 24) {
+    const bytes = new Uint8Array(byteLength);
+    crypto.getRandomValues(bytes);
+    return Buffer.from(bytes).toString('base64url');
+  }
+
+  /**
+   * Decodes a `kubectl -o jsonpath='{.data.a}|{.data.b}'` result (base64-encoded Secret
+   * values, pipe-joined) into [a, b]. Returns null when either half is missing -- the Secret
+   * doesn't exist yet, or doesn't carry both keys.
+   */
+  _decodeSecretPair(stdout) {
+    const trimmed = (stdout || '').trim();
+    if (!trimmed.includes('|')) return null;
+    const [a, b] = trimmed.split('|');
+    if (!a || !b) return null;
+    return [Buffer.from(a, 'base64').toString('utf8'), Buffer.from(b, 'base64').toString('utf8')];
+  }
+
+  /**
+   * Generates (once) or reads back the RustFS credential for the bundled snapshot store,
+   * so the main substrate release and the atelet client agree on the same non-default
+   * secret key -- see RUSTFS_CREDENTIALS_SECRET. Idempotent: an existing Secret is read
+   * back rather than regenerated, so a redeploy doesn't rotate a live credential.
+   */
+  async _ensureRustfsCredentials() {
+    const ateNs = this.substrate.namespace;
+    const ctxFlag = this.kubeContext ? `--context=${this.kubeContext}` : '';
+    const ctxStr = ctxFlag ? `${ctxFlag} ` : '';
+
+    const existing = await CommandRunner.exec(
+      `kubectl ${ctxStr}get secret ${RUSTFS_CREDENTIALS_SECRET} -n ${ateNs} -o jsonpath="{.data.AWS_ACCESS_KEY_ID}|{.data.AWS_SECRET_ACCESS_KEY}" --ignore-not-found`,
+      { ignoreError: true }
+    );
+    const decoded = !existing.exitCode && this._decodeSecretPair(existing.stdout);
+    if (decoded) {
+      return { accessKey: decoded[0], secretKey: decoded[1] };
+    }
+
+    this.log('Generating RustFS credentials for the bundled snapshot store');
+    const accessKey = RUSTFS_DEFAULT_ACCESS_KEY;
+    const secretKey = this._randomCredential();
+    const createResult = await CommandRunner.exec(
+      `kubectl ${ctxStr}create secret generic ${RUSTFS_CREDENTIALS_SECRET} -n ${ateNs} ` +
+        `--from-literal=AWS_ACCESS_KEY_ID=${accessKey} --from-literal=AWS_SECRET_ACCESS_KEY="${secretKey}" ` +
+        `--dry-run=client -o yaml | kubectl ${ctxStr}apply -f -`,
+      { ignoreError: true }
+    );
+    if (createResult.exitCode) {
+      throw new Error(
+        `Failed to create ${RUSTFS_CREDENTIALS_SECRET}: ${createResult.stderr?.trim()}`
+      );
+    }
+    return { accessKey, secretKey };
+  }
+
+  /**
+   * Generates (once) or reads back the credential for the bundled ClickHouse instance
+   * (alpha chart only -- see CLICKHOUSE_CREDENTIALS_SECRET), stored in this release's own
+   * namespace so the otel-collector addon can read the same Secret back. Idempotent, same
+   * reasoning as _ensureRustfsCredentials.
+   */
+  async _ensureClickhouseCredentials() {
+    const ctxFlag = this.kubeContext ? `--context=${this.kubeContext}` : '';
+    const ctxStr = ctxFlag ? `${ctxFlag} ` : '';
+
+    const existing = await CommandRunner.exec(
+      `kubectl ${ctxStr}get secret ${CLICKHOUSE_CREDENTIALS_SECRET} -n ${this.namespace} -o jsonpath="{.data.username}|{.data.password}" --ignore-not-found`,
+      { ignoreError: true }
+    );
+    const decoded = !existing.exitCode && this._decodeSecretPair(existing.stdout);
+    if (decoded) {
+      return { username: decoded[0], password: decoded[1] };
+    }
+
+    this.log('Generating ClickHouse credentials for the bundled instance');
+    const username = CLICKHOUSE_DEFAULT_USERNAME;
+    const password = this._randomCredential();
+    const createResult = await CommandRunner.exec(
+      `kubectl ${ctxStr}create secret generic ${CLICKHOUSE_CREDENTIALS_SECRET} -n ${this.namespace} ` +
+        `--from-literal=username=${username} --from-literal=password="${password}" ` +
+        `--dry-run=client -o yaml | kubectl ${ctxStr}apply -f -`,
+      { ignoreError: true }
+    );
+    if (createResult.exitCode) {
+      throw new Error(
+        `Failed to create ${CLICKHOUSE_CREDENTIALS_SECRET}: ${createResult.stderr?.trim()}`
+      );
+    }
+    return { username, password };
   }
 }

@@ -57,14 +57,17 @@ import { nlbSourceRangeAnnotations } from '../../../src/lib/common.js';
  *                             // GEP-713, confirmed present in this cluster's HTTPRoute and
  *                             // EnterpriseAgentgatewayPolicy CRDs), rather than the whole
  *                             // route. Lets one route serve both gated and ungated traffic.
- *   sourceRanges: string[],   // Optional — CIDR allowlist for the public NLB (e.g.
- *                             // env.security.vpnSourceRanges), same nlbSourceRangeAnnotations
- *                             // helper the shared hub-agentgateway-proxy Gateway uses. Also
- *                             // what actually pins the NLB scheme to internet-facing --
- *                             // without this feature wiring an EnterpriseAgentgatewayParameters
- *                             // object at all, AWS LBC's own default (internal) silently makes
- *                             // this Gateway's Service unreachable from outside the VPC
- *                             // regardless of source IP; confirmed live.
+ *   sourceRanges: string[],   // Optional — CIDR allowlist for the public LB (e.g.
+ *                             // env.security.vpnSourceRanges). Applied both as the AWS NLB
+ *                             // nlbSourceRangeAnnotations and as native
+ *                             // spec.service.spec.loadBalancerSourceRanges on
+ *                             // EnterpriseAgentgatewayParameters, since the annotation is a
+ *                             // no-op on GKE/AKS. Also what pins the NLB scheme to
+ *                             // internet-facing on AWS -- without this feature wiring an
+ *                             // EnterpriseAgentgatewayParameters object at all, AWS LBC's own
+ *                             // default (internal) silently makes this Gateway's Service
+ *                             // unreachable from outside the VPC regardless of source IP;
+ *                             // confirmed live.
  *   backend: {                // Required — existing Service this route sends traffic to
  *     name: string,           // Required
  *     port: number,           // Required
@@ -264,6 +267,12 @@ export class OidcGatewayFeature extends Feature {
       spec: {
         service: {
           metadata: { annotations: nlbSourceRangeAnnotations(this.sourceRanges) },
+          // Native spec.loadBalancerSourceRanges, alongside the AWS-only annotation above --
+          // the annotation is a no-op on GKE/AKS, so this is what actually gates the LB
+          // cross-cloud.
+          ...(this.sourceRanges.length > 0 && {
+            spec: { loadBalancerSourceRanges: this.sourceRanges },
+          }),
         },
       },
     };
@@ -404,12 +413,17 @@ export class OidcGatewayFeature extends Feature {
         await this.applyResource(this.buildCertificate(), context);
         await this.applyResource(this.buildGatewayParameters(), context);
         await this.applyResource(this.buildGateway(), context);
-        await this.applyResource(this.buildHttpRoute(), context);
       }
+      // Gate applied before the HTTPRoute so the backend is never reachable through a
+      // programmed route without its auth already in place -- an EnterpriseAgentgatewayPolicy
+      // can validly target an HTTPRoute that doesn't exist yet.
       if (this.clientId) {
         await this.applyResource(this.buildClientSecret(), context);
         await this.applyResource(this.buildAuthConfig(), context);
         await this.applyResource(this.buildExtAuthPolicy(), context);
+      }
+      if (this.createGateway) {
+        await this.applyResource(this.buildHttpRoute(), context);
       }
     }
     if (this.clientId) {
@@ -432,6 +446,12 @@ export class OidcGatewayFeature extends Feature {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
+      // HTTPRoute/Gateway removed before the auth gate so the route never serves traffic
+      // ungated while cleanup is in progress.
+      if (this.createGateway) {
+        await this.deleteResource('httproute', this.routeName, this.namespace, context);
+        await this.deleteResource('gateway', this.gatewayName, this.namespace, context);
+      }
       if (this.clientId) {
         await this.deleteResource(
           'enterpriseagentgatewaypolicy',
@@ -443,8 +463,6 @@ export class OidcGatewayFeature extends Feature {
         await this.deleteResource('secret', this.clientSecretName, this.namespace, context);
       }
       if (this.createGateway) {
-        await this.deleteResource('httproute', this.routeName, this.namespace, context);
-        await this.deleteResource('gateway', this.gatewayName, this.namespace, context);
         await this.deleteResource(
           'enterpriseagentgatewayparameters',
           this.paramsName,
