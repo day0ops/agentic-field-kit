@@ -69,7 +69,13 @@ export class FraudOpsConsoleFeature extends Feature {
     this.hostname = config.hostname;
     this.clusterIssuer = config.clusterIssuer || 'letsencrypt-dns';
     this.gatewayClassName = config.gatewayClassName || 'enterprise-agentgateway';
-    this.sourceRanges = config.sourceRanges || null;
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.sourceRanges = Array.isArray(config.sourceRanges)
+      ? config.sourceRanges.flat().filter(Boolean)
+      : config.sourceRanges || null;
     this.ateApiEndpoint = config.ateApiEndpoint || 'api.ate-system.svc.cluster.local:443';
     this.workerPoolName = config.workerPoolName || 'fraud-workers';
     this.clickhouseDsn = config.clickhouseDsn;

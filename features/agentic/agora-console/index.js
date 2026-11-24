@@ -128,7 +128,13 @@ export class AgoraConsoleFeature extends Feature {
     this.hostname = config.hostname;
     this.clusterIssuer = config.clusterIssuer || 'letsencrypt-dns';
     this.gatewayClassName = config.gatewayClassName || 'enterprise-agentgateway';
-    this.sourceRanges = config.sourceRanges || null;
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.sourceRanges = Array.isArray(config.sourceRanges)
+      ? config.sourceRanges.flat().filter(Boolean)
+      : config.sourceRanges || null;
     this.catalogApiPort = config.catalogApiPort || 18080;
     this.consolePort = config.consolePort || 18090;
     this.exposeDirectly = config.exposeDirectly !== false;

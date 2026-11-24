@@ -350,7 +350,13 @@ export class KagentFeature extends AddonFeature {
     this.tlsSecretName = tls.secretName || 'kagent-ui-tls';
     this.tlsIssuer = tls.issuer || 'letsencrypt-dns';
     this.gatewayClassName = config.gatewayClassName || 'enterprise-agentgateway';
-    this.gatewaySourceRanges = config.gatewaySourceRanges || null;
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.gatewaySourceRanges = Array.isArray(config.gatewaySourceRanges)
+      ? config.gatewaySourceRanges.flat().filter(Boolean)
+      : config.gatewaySourceRanges || null;
 
     // RBAC group -> kagent role mappings (enterprise)
     const rbac = config.rbac || {};

@@ -163,7 +163,13 @@ export class TelemetryFeature extends AddonFeature {
       this.dashboardCategories = Array.isArray(config.dashboardCategories)
         ? config.dashboardCategories
         : null;
-      this.grafanaSourceRanges = config.sourceRanges || null;
+      // Profile YAML may mix a whole-list template token (resolves to an array) with
+      // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+      // is always a flat string[], never a jagged array (the Gateway controller rejects a
+      // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+      this.grafanaSourceRanges = Array.isArray(config.sourceRanges)
+        ? config.sourceRanges.flat().filter(Boolean)
+        : config.sourceRanges || null;
       this.grafanaOidc = config.grafanaOidc || null;
       this.globalExport = config.globalExport === true;
       this.shouldInstallOtelCollectors = config.installOtelCollectors !== false;

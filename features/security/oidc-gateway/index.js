@@ -124,7 +124,13 @@ export class OidcGatewayFeature extends Feature {
     this.createGateway = config.createGateway !== false;
     this.sectionName = config.sectionName || null;
     this.paramsName = config.gatewayName ? `${config.gatewayName}-params` : undefined;
-    this.sourceRanges = config.sourceRanges || [];
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.sourceRanges = Array.isArray(config.sourceRanges)
+      ? config.sourceRanges.flat().filter(Boolean)
+      : config.sourceRanges || [];
     this.backend = config.backend || {};
     this.authConfigName = config.authConfigName || `${config.routeName}-oidc`;
     this.policyName = config.policyName || `${config.routeName}-oidc-gate`;

@@ -397,7 +397,13 @@ export class AgentregistryFeature extends AddonFeature {
     this.tlsEnabled = !!(tls.secretName || tls.issuer || tls.enabled);
     this.tlsSecretName = tls.secretName || 'agentregistry-tls';
     this.tlsIssuer = tls.issuer || 'letsencrypt-dns';
-    this.sourceRanges = config.sourceRanges || null;
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.sourceRanges = Array.isArray(config.sourceRanges)
+      ? config.sourceRanges.flat().filter(Boolean)
+      : config.sourceRanges || null;
 
     const oidc = config.oidc || {};
     if (oidc.issuer) {
