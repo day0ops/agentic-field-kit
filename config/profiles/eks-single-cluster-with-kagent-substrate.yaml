@@ -60,10 +60,18 @@ spec:
           clusterIssuerName: letsencrypt-dns
         realms:
           - realm: kagent
+            # fixture_id claim carries each user's real fixtures.Buyer/Seller ID (e.g.
+            # "buyer-1"), used by agora-mcp-bid-identity's CEL check in agora-demo-eks.yaml.
+            customAttributes:
+              - fixture_id
             groups:
               - kagent-admins
               - kagent-writers
               - kagent-readers
+              - buyers
+              - sellers
+              - operators
+              - agora-system
             clients:
               - clientId: kagent-enterprise
                 type: confidential
@@ -99,6 +107,43 @@ spec:
                 # makes the controller reject every token with a bare 401, confirmed live.
                 audience: kagent-enterprise-api
                 serviceAccountGroup: kagent-writers
+              # Agora marketplace demo's buyer/seller login + agentgateway A2A chat. Lives in
+              # this realm, not a separate one: kagent-controller's enterprise OIDC validation
+              # trusts exactly one issuer, so a same-realm token exchange against a different
+              # realm can never produce an accepted token. Multiple client applications in one
+              # realm, differentiated by group, is the supported pattern for this.
+              - clientId: agora-console-ui
+                type: confidential
+                clientSecret: agora-console-ui-secret
+                # authorization-code is the real Keycloak-redirect login oidc-gateway drives.
+                # direct-access is a local/no-gate dev fallback.
+                flows:
+                  - direct-access
+                  - authorization-code
+                redirectUris:
+                  # /account/callback, not /callback -- oidc-gateway's attach-only mode only
+                  # gates agora-console's /account rule, so the callback must land there too.
+                  - '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}/account/callback'
+                postLogoutRedirectUris:
+                  - '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}'
+                groupMembership: true
+                audience: kagent-enterprise-api
+                # Keycloak 26.2+ requires this attribute explicitly enabled per-client or the
+                # token-exchange-policy's exchange endpoint rejects with "Standard token
+                # exchange is not enabled for the requested client".
+                clientAttributes:
+                  standard.token.exchange.enabled: 'true'
+              # Agora Operator Studio's own system identity for the isolation-check probe
+              # (console/isolation_probe.go) - a client-credentials grant, never a visitor's
+              # forwarded token.
+              - clientId: agora-console-system
+                type: confidential
+                clientSecret: agora-console-system-secret
+                flows:
+                  - service-account
+                groupMembership: true
+                audience: kagent-enterprise-api
+                serviceAccountGroup: agora-system
             users:
               - username: kagent-admin
                 email: kagent-admin@example.com
@@ -118,6 +163,40 @@ spec:
                 lastName: Reader
                 memberOf:
                   - kagent-readers
+              - username: demo-buyer
+                email: demo-buyer@example.com
+                firstName: Demo
+                lastName: Buyer
+                memberOf:
+                  - buyers
+                attributes:
+                  fixture_id: buyer-1
+              # Second buyer identity, for live-auction demos with two real competing bidders.
+              - username: demo-buyer2
+                email: demo-buyer2@example.com
+                firstName: Demo
+                lastName: Buyer2
+                memberOf:
+                  - buyers
+                attributes:
+                  fixture_id: buyer-2
+              - username: demo-seller
+                email: demo-seller@example.com
+                firstName: Demo
+                lastName: Seller
+                memberOf:
+                  - sellers
+                attributes:
+                  fixture_id: seller-1
+              - username: demo-operator
+                email: demo-operator@example.com
+                firstName: Demo
+                lastName: Operator
+                memberOf:
+                  - operators
+            # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile -- except
+            # demo-buyer/demo-seller/demo-operator, which use AGORA_CUSTOMER_PASSWORD instead
+            # (per-user override, see addons/keycloak/index.js's userPasswordOverrides)
 
     - name: kagent
       description: Solo Enterprise for kagent AI agent platform + Agent Substrate
