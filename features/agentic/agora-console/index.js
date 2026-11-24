@@ -337,6 +337,44 @@ export class AgoraConsoleFeature extends Feature {
           metadata: { labels: { app: 'console' } },
           spec: {
             ...(this.ateApiEndpoint ? { serviceAccountName: 'agora-console' } : {}),
+            // ate-ca/ate-token back the native gRPC ate-api client; kubelet
+            // rotates both, so the console never mints/refreshes anything.
+            // optional: true avoids blocking pod startup if no bundle matches.
+            ...(this.ateApiEndpoint
+              ? {
+                  volumes: [
+                    {
+                      name: 'ate-ca',
+                      projected: {
+                        sources: [
+                          {
+                            clusterTrustBundle: {
+                              signerName: 'servicedns.podcert.ate.dev/identity',
+                              labelSelector: { matchLabels: { 'podcert.ate.dev/canarying': 'live' } },
+                              path: 'trust-bundle.pem',
+                              optional: true,
+                            },
+                          },
+                        ],
+                      },
+                    },
+                    {
+                      name: 'ate-token',
+                      projected: {
+                        sources: [
+                          {
+                            serviceAccountToken: {
+                              audience: 'api.ate-system.svc',
+                              expirationSeconds: 3600,
+                              path: 'token',
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }
+              : {}),
             containers: [
               {
                 name: 'console',
@@ -345,6 +383,14 @@ export class AgoraConsoleFeature extends Feature {
                 // IfNotPresent leaves nodes serving a stale cached digest.
                 imagePullPolicy: 'Always',
                 ports: [{ containerPort: this.consolePort }],
+                ...(this.ateApiEndpoint
+                  ? {
+                      volumeMounts: [
+                        { name: 'ate-ca', mountPath: '/var/run/ate/ca', readOnly: true },
+                        { name: 'ate-token', mountPath: '/var/run/ate/token', readOnly: true },
+                      ],
+                    }
+                  : {}),
                 env: [
                   { name: 'PORT', value: String(this.consolePort) },
                   {

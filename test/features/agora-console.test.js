@@ -165,6 +165,32 @@ describe('agora-console with ateApiEndpoint configured', () => {
     expect(env).toContainEqual({ name: 'ATE_WORKER_POOL_NAME', value: 'agora-workers' });
   });
 
+  // Backs the native ate-api gRPC client (console's grpcActorSource) -
+  // kubelet-projected, so the console never mints or refreshes a token or CA
+  // bundle itself. kubectl-ate stays wired up as the fallback via its own
+  // ate-client RBAC grant (buildAteTokenRole/buildAteTokenRoleBinding),
+  // untouched by this.
+  it('projects an ate-api CA bundle and a scoped ServiceAccount token, mounted into the console container', () => {
+    const d = f.buildConsoleDeployment();
+    const volumes = d.spec.template.spec.volumes;
+    const caVolume = volumes.find(v => v.name === 'ate-ca');
+    expect(caVolume.projected.sources[0].clusterTrustBundle).toEqual({
+      signerName: 'servicedns.podcert.ate.dev/identity',
+      labelSelector: { matchLabels: { 'podcert.ate.dev/canarying': 'live' } },
+      path: 'trust-bundle.pem',
+      optional: true, // don't block pod startup if no bundle matches
+    });
+    const tokenVolume = volumes.find(v => v.name === 'ate-token');
+    expect(tokenVolume.projected.sources[0].serviceAccountToken).toEqual({
+      audience: 'api.ate-system.svc',
+      expirationSeconds: 3600,
+      path: 'token',
+    });
+    const mounts = d.spec.template.spec.containers[0].volumeMounts;
+    expect(mounts).toContainEqual({ name: 'ate-ca', mountPath: '/var/run/ate/ca', readOnly: true });
+    expect(mounts).toContainEqual({ name: 'ate-token', mountPath: '/var/run/ate/token', readOnly: true });
+  });
+
   it('wires AGORA_ATESPACE and KAGENT_PROBE_BASE_URL from an explicit agentNamespace config field when set', () => {
     const f2 = new AgoraConsoleFeature('agora-console', {
       namespace: 'agora-demo',
@@ -261,6 +287,8 @@ describe('agora-console with systemKeycloak configured', () => {
   it('does not require ateApiEndpoint - no serviceAccountName or RBAC objects needed for the probe alone', () => {
     const d = f.buildConsoleDeployment();
     expect(d.spec.template.spec.serviceAccountName).toBeUndefined();
+    expect(d.spec.template.spec.volumes).toBeUndefined();
+    expect(d.spec.template.spec.containers[0].volumeMounts).toBeUndefined();
   });
 
   it('builds a Secret holding the systemKeycloak client secret', () => {
