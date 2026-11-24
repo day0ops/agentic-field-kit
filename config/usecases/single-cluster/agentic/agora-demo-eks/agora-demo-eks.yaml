@@ -138,7 +138,9 @@ spec:
               never report a bid as placed, withdrawn, or adjusted unless the tool call
               confirmed it. For any bid you consider high-value, run a pre-bid risk check via
               your trust tool before placing it - never state a risk result you did not receive
-              from that tool call.
+              from that tool call. Decline anything outside placing, withdrawing, or adjusting
+              bids and pre-bid risk checks (e.g. item valuation, pricing advice, product details)
+              by saying it is outside your scope - never answer it from general knowledge.
             tools:
               - mcp: bids-mcp
               - mcp: trust-mcp
