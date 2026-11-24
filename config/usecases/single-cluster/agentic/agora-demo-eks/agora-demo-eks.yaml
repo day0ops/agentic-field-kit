@@ -167,7 +167,11 @@ spec:
         catalogApiImage: '{{env.images.agoraDemo.catalogApi}}'
         consoleImage: '{{env.images.agoraDemo.console}}'
         hostname: '{{env.domains.app.agoraDemo}}'
-        sourceRanges: '{{env.security.vpnSourceRanges}}'
+        # The NAT gateway IP lets in-cluster callers (e.g. kagent-controller's A2A/MCP calls
+        # to this same Gateway's public hostname) hairpin back through it.
+        sourceRanges:
+          - '{{env.security.vpnSourceRanges}}'
+          - '{{infra.clusters.demo.network.natGatewayIp}}/32'
         # /shop requires a real login now - no anonymous browsing. /account is always
         # gated regardless of this list.
         gatedPaths:

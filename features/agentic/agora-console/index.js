@@ -1,4 +1,5 @@
 import { Feature } from '../../../src/lib/feature.js';
+import { nlbSourceRangeAnnotations } from '../../../src/lib/common.js';
 
 /**
  * AgoraConsoleFeature
@@ -415,14 +416,22 @@ export class AgoraConsoleFeature extends Feature {
   // buildGatewayParameters returns an EnterpriseAgentgatewayParameters object
   // restricting the Gateway's LoadBalancer Service to sourceRanges, or
   // undefined when sourceRanges isn't set (leaves the LB open). Same pattern
-  // as fraud-ops-console's buildGatewayParameters().
+  // as fraud-ops-console's buildGatewayParameters(). nlbSourceRangeAnnotations
+  // is a no-op on GCP; on AWS it's what selects NLB over the in-tree Classic
+  // ELB default once aws-load-balancer-controller is installed.
   buildGatewayParameters() {
     if (!this.sourceRanges) return undefined;
+    const nlbAnnotations = nlbSourceRangeAnnotations(this.sourceRanges);
     return {
       apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
       kind: 'EnterpriseAgentgatewayParameters',
       metadata: { name: 'agora-console-https-params', namespace: this.namespace },
-      spec: { service: { spec: { loadBalancerSourceRanges: this.sourceRanges } } },
+      spec: {
+        service: {
+          ...(nlbAnnotations ? { metadata: { annotations: nlbAnnotations } } : {}),
+          spec: { loadBalancerSourceRanges: this.sourceRanges },
+        },
+      },
     };
   }
 

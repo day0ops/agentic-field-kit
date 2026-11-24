@@ -14,6 +14,14 @@ spec:
   gatewayApiVersion: v1.6.3
 
   addons:
+    - name: aws-load-balancer-controller
+      description: AWS Load Balancer Controller (IRSA-backed NLB/ALB provisioning)
+      version: 3.5.0
+      config:
+        clusterName: '{{infra.clusters.demo.cluster}}'
+        serviceAccountRoleArn: '{{infra.clusters.demo.iam.albControllerRoleArn}}'
+        vpcId: '{{infra.clusters.demo.network.vpcId}}'
+
     - name: cert-manager
       description: TLS certificate management (Let's Encrypt via Route53)
       version: '{{env.addons.cert-manager.version}}'
@@ -58,6 +66,11 @@ spec:
           enabled: true
           createCertificate: true
           clusterIssuerName: letsencrypt-dns
+        # Keycloak must stay reachable by real end users anywhere, not just the VPN -- this
+        # just selects NLB (via aws-load-balancer-controller) instead of the in-tree Classic
+        # ELB default; it doesn't restrict who can reach it.
+        sourceRanges:
+          - 0.0.0.0/0
         realms:
           - realm: kagent
             # fixture_id claim carries each user's real fixtures.Buyer/Seller ID (e.g.
@@ -207,7 +220,11 @@ spec:
         enterprise: true
         clusterName: mgmt-cluster
         hostname: '{{env.domains.core.kagentUi}}'
-        gatewaySourceRanges: '{{env.security.vpnSourceRanges}}'
+        # The NAT gateway IP lets in-cluster callers (e.g. kagent-controller discovering its
+        # own RemoteMCPServer tools) hairpin back through this Gateway's public hostname.
+        gatewaySourceRanges:
+          - '{{env.security.vpnSourceRanges}}'
+          - '{{infra.clusters.demo.network.natGatewayIp}}/32'
         provider:
           type: openAI
         oidc:
@@ -247,7 +264,9 @@ spec:
         dashboardCategories: ['agw', 'substrate']
         installOtelCollectors: false
         gatewayClassName: enterprise-agentgateway
-        sourceRanges: '{{env.security.vpnSourceRanges}}'
+        sourceRanges:
+          - '{{env.security.vpnSourceRanges}}'
+          - '{{infra.clusters.demo.network.natGatewayIp}}/32'
         grafanaHostname: '{{env.domains.core.grafana}}'
         grafanaTls:
           enabled: true

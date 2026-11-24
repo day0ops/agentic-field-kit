@@ -5,7 +5,7 @@ import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import yaml from 'js-yaml';
 import { AddonFeature } from '../../src/lib/feature.js';
-import { KubernetesHelper, CommandRunner } from '../../src/lib/common.js';
+import { KubernetesHelper, CommandRunner, nlbSourceRangeAnnotations } from '../../src/lib/common.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_DIR = path.join(__dirname, 'config');
@@ -1156,14 +1156,21 @@ export class KagentFeature extends AddonFeature {
     };
 
     if (this.gatewaySourceRanges) {
-      // Native spec.loadBalancerSourceRanges, not an AWS-only annotation --
-      // this Gateway's LB is a GCP one.
+      // Native spec.loadBalancerSourceRanges (what GCP's Gateway LB honors directly) plus
+      // nlbSourceRangeAnnotations (a no-op on GCP; on AWS it's what selects NLB over the
+      // in-tree Classic ELB default once aws-load-balancer-controller is installed).
+      const nlbAnnotations = nlbSourceRangeAnnotations(this.gatewaySourceRanges);
       await this.applyResource(
         {
           apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
           kind: 'EnterpriseAgentgatewayParameters',
           metadata: { name: 'kagent-ui-https-params', namespace: this.namespace },
-          spec: { service: { spec: { loadBalancerSourceRanges: this.gatewaySourceRanges } } },
+          spec: {
+            service: {
+              ...(nlbAnnotations ? { metadata: { annotations: nlbAnnotations } } : {}),
+              spec: { loadBalancerSourceRanges: this.gatewaySourceRanges },
+            },
+          },
         },
         this.kubeContext
       );

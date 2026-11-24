@@ -115,8 +115,9 @@ async function _generateGateway(addonCfg, clusterName, env) {
   const grafanaTls = cfg.grafanaTls || {};
   const gatewayClassName = cfg.gatewayClassName || 'istio';
   const grafanaSourceRanges = Array.isArray(cfg.sourceRanges) ? cfg.sourceRanges : null;
-  // Mirrors index.js: the AWS NLB annotation path only applies to Istio-classed Gateways --
-  // a non-Istio GatewayClass needs the native EnterpriseAgentgatewayParameters CR instead.
+  // Mirrors index.js: a non-Istio GatewayClass needs the native EnterpriseAgentgatewayParameters
+  // CR instead of Gateway API's spec.infrastructure.annotations; the AWS NLB annotations are
+  // applied on both paths (a no-op on GCP/Azure).
   const useAgentgatewayParams = Boolean(grafanaSourceRanges) && gatewayClassName !== 'istio';
   const grafanaOidc = cfg.grafanaOidc || {};
   const globalExport = cfg.globalExport === true;
@@ -170,8 +171,7 @@ EOF
 ${
   useAgentgatewayParams
     ? `
-# CIDR allowlist for the Gateway's public LB (non-Istio GatewayClass, e.g. GCP +
-# enterprise-agentgateway -- the AWS NLB annotations path above doesn't apply here)
+# CIDR allowlist for the Gateway's public LB (non-Istio GatewayClass, e.g. enterprise-agentgateway)
 kubectl apply -f - <<EOF
 apiVersion: enterpriseagentgateway.solo.io/v1alpha1
 kind: EnterpriseAgentgatewayParameters
@@ -180,6 +180,13 @@ metadata:
   namespace: ${ns}
 spec:
   service:
+    metadata:
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-type: external
+        service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+        service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+        service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=true
+        service.beta.kubernetes.io/load-balancer-source-ranges: "${grafanaSourceRanges.join(',')}"
     spec:
       loadBalancerSourceRanges:
 ${grafanaSourceRanges.map(r => `        - ${r}`).join('\n')}

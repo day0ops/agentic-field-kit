@@ -320,15 +320,15 @@ export class TelemetryFeature extends AddonFeature {
       this.kubeContext
     );
 
-    // nlbSourceRangeAnnotations emits AWS NLB-specific annotations -- only meaningful when
-    // the Gateway is Istio-backed (every existing profile using sourceRanges today). A
-    // non-Istio GatewayClass (e.g. enterprise-agentgateway on GCP) needs the native
-    // EnterpriseAgentgatewayParameters mechanism below instead, same as kagent's own UI Gateway.
+    // A non-Istio GatewayClass (e.g. enterprise-agentgateway) needs the native
+    // EnterpriseAgentgatewayParameters mechanism below instead of Gateway API's
+    // spec.infrastructure.annotations, which that controller doesn't support -- same as
+    // kagent's own UI Gateway. nlbSourceRangeAnnotations is applied on both paths: it's a
+    // no-op on GKE/AKS, and on AWS it's what actually selects NLB (vs the in-tree Classic
+    // ELB default) once aws-load-balancer-controller is installed.
     const useAgentgatewayParams =
       Boolean(this.grafanaSourceRanges) && this.gatewayClassName !== 'istio';
-    const nlbAnnotations = useAgentgatewayParams
-      ? null
-      : nlbSourceRangeAnnotations(this.grafanaSourceRanges);
+    const nlbAnnotations = nlbSourceRangeAnnotations(this.grafanaSourceRanges);
 
     if (useAgentgatewayParams) {
       await this.applyResource(
@@ -336,7 +336,12 @@ export class TelemetryFeature extends AddonFeature {
           apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
           kind: 'EnterpriseAgentgatewayParameters',
           metadata: { name: 'grafana-https-params', namespace: this.namespace },
-          spec: { service: { spec: { loadBalancerSourceRanges: this.grafanaSourceRanges } } },
+          spec: {
+            service: {
+              ...(nlbAnnotations ? { metadata: { annotations: nlbAnnotations } } : {}),
+              spec: { loadBalancerSourceRanges: this.grafanaSourceRanges },
+            },
+          },
         },
         this.kubeContext
       );
