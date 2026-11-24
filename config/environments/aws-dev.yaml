@@ -127,13 +127,13 @@ spec:
       repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
       chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
     agoraDemo:
-      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.1
-      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.1
-      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.1
-      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.1
-      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.1
-      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.1
-      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.1
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.3
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.3
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.3
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.3
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.3
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.3
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.3
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
