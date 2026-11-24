@@ -1498,6 +1498,24 @@ export class KagentFeature extends AddonFeature {
         { spinner: this.spinner }
       );
     }
+
+    // The cloud-identity mutating webhook (IRSA/Workload Identity) only injects credentials
+    // at pod admission time. ate-api-server's Deployment and atelet's DaemonSet both already
+    // created pods before this annotation landed (the substrate chart's first pass above, and
+    // _installSubstrateAtelet), so without a restart those pods run forever with no cloud
+    // credentials -- confirmed live (2026-11-24) as an infinite ActorTemplate delete/retry loop
+    // ("Invalid region: region was not a valid DNS name") that never clears on its own.
+    // _waitForSubstrateReady, called later in _deployEnterprise, already rollout-status-waits
+    // on both of these, so no extra wait is needed here.
+    this.log('Restarting atelet and ate-api-server to pick up workload identity credentials');
+    await KubernetesHelper.kubectl(
+      [...ctxArgs, 'rollout', 'restart', 'deploy/ate-api-server', '-n', this.substrate.namespace],
+      { spinner: this.spinner }
+    );
+    await KubernetesHelper.kubectl(
+      [...ctxArgs, 'rollout', 'restart', 'ds/atelet', '-n', this.substrate.namespace],
+      { spinner: this.spinner }
+    );
   }
 
   /**

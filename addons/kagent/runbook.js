@@ -760,6 +760,15 @@ kubectl annotate serviceaccount ate-api-server -n $SUBSTRATE_NAMESPACE \\
   ${substrateIdentityAnnotation.key}=${substrateIdentityAnnotation.value} \\
   --overwrite --context ${ctx}
 \`\`\`
+
+The cloud-identity mutating webhook only injects credentials at pod admission time, and both
+workloads above already created pods before this annotation landed -- restart them so the new
+pods pick up credentials (the rollout status waits later in this runbook cover both):
+
+\`\`\`bash
+kubectl rollout restart deploy/ate-api-server -n $SUBSTRATE_NAMESPACE --context ${ctx}
+kubectl rollout restart ds/atelet -n $SUBSTRATE_NAMESPACE --context ${ctx}
+\`\`\`
 `
     : ''
 }
