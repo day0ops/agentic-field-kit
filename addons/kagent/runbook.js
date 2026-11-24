@@ -916,6 +916,13 @@ metadata:
   namespace: $KAGENT_NAMESPACE
 spec:
   service:
+    metadata:
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-type: external
+        service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+        service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+        service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=true
+        service.beta.kubernetes.io/load-balancer-source-ranges: "${gatewaySourceRanges.join(',')}"
     spec:
       loadBalancerSourceRanges:
 ${gatewaySourceRanges.map(r => `        - ${r}`).join('\n')}
