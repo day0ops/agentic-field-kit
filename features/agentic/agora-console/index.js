@@ -281,6 +281,9 @@ export class AgoraConsoleFeature extends Feature {
               {
                 name: 'catalog-api',
                 image: this.catalogApiImage,
+                // Always: these demo tags get rebuilt/reused across releases, and
+                // IfNotPresent leaves nodes serving a stale cached digest.
+                imagePullPolicy: 'Always',
                 ports: [{ containerPort: this.catalogApiPort }],
                 env: [{ name: 'PORT', value: String(this.catalogApiPort) }],
                 readinessProbe: {
@@ -338,6 +341,9 @@ export class AgoraConsoleFeature extends Feature {
               {
                 name: 'console',
                 image: this.consoleImage,
+                // Always: these demo tags get rebuilt/reused across releases, and
+                // IfNotPresent leaves nodes serving a stale cached digest.
+                imagePullPolicy: 'Always',
                 ports: [{ containerPort: this.consolePort }],
                 env: [
                   { name: 'PORT', value: String(this.consolePort) },
