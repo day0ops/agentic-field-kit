@@ -92,6 +92,17 @@ const DIGEST_PIN_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/;
  *       { agent: string, description: string }, // delegate to another agent in this list (-> CRD's subAgent tool)
  *       { mcp: string, tools: string[] }, // bind a RemoteMCPServer named `mcp`; `tools` optionally limits exposed tools
  *     ],
+ *     skills: [{ name: string, oci: string }], // optional -- AgentTemplate.spec.skills; oci must be
+ *                                                // digest-pinned (name@sha256:<64 hex>), same CRD-enforced
+ *                                                // pattern as Harness.spec.workload.image
+ *     egressPolicyRefs: string[], // optional -- names of EgressPolicy objects (api.kagent.dev/v1alpha3,
+ *                                   // same namespace) this Agent references for extra network access
+ *                                   // beyond the auto-granted model/MCP-server base. A ref to a policy
+ *                                   // that doesn't exist yet is fine -- it just sets the Agent's
+ *                                   // EgressPoliciesApplied condition to EgressPolicyNotFound without
+ *                                   // blocking readiness, so the policy itself can be created/deleted
+ *                                   // later at runtime (e.g. by a console's own grant/revoke action)
+ *                                   // without redeploying this Agent.
  *   }],
  * }
  */
@@ -164,6 +175,19 @@ export class SubstrateAgentFeature extends Feature {
         }
         if (t.mcp === '' || (t.mcp === undefined && t.agent === undefined)) {
           throw new Error('substrate-agent: each tool must set either agent or mcp');
+        }
+      }
+      for (const s of a.skills || []) {
+        if (!s.name) throw new Error(`substrate-agent: agent '${a.name}' has a skill with no name`);
+        if (!DIGEST_PIN_PATTERN.test(s.oci || '')) {
+          throw new Error(
+            `substrate-agent: agent '${a.name}' skill '${s.name}' oci must be digest-pinned (name@sha256:<64 hex>)`
+          );
+        }
+      }
+      for (const ref of a.egressPolicyRefs || []) {
+        if (typeof ref !== 'string' || !ref) {
+          throw new Error(`substrate-agent: agent '${a.name}' has an empty egressPolicyRefs entry`);
         }
       }
     }
@@ -295,6 +319,9 @@ export class SubstrateAgentFeature extends Feature {
         systemPrompt: a.systemPrompt || 'You are a helpful assistant. Answer concisely.',
       };
       if (tools) spec.tools = tools;
+      if (a.skills?.length) {
+        spec.skills = a.skills.map(s => ({ name: s.name, source: { oci: s.oci } }));
+      }
       return {
         apiVersion: 'api.kagent.dev/v1alpha3',
         kind: 'AgentTemplate',
@@ -324,19 +351,25 @@ export class SubstrateAgentFeature extends Feature {
   // this version); invocation now requires this explicit per-agent pairing
   // resource instead.
   buildAgents() {
-    return this.agents.map(a => ({
-      apiVersion: 'api.kagent.dev/v1alpha3',
-      kind: 'Agent',
-      metadata: {
-        name: a.name,
-        namespace: this.namespace,
-        labels: { 'app.kubernetes.io/managed-by': 'agentic-demo' },
-      },
-      spec: {
+    return this.agents.map(a => {
+      const spec = {
         template: { ref: { name: a.name } },
         harnessRef: { name: this.harnessName },
-      },
-    }));
+      };
+      if (a.egressPolicyRefs?.length) {
+        spec.egressPolicyRefs = a.egressPolicyRefs.map(name => ({ name }));
+      }
+      return {
+        apiVersion: 'api.kagent.dev/v1alpha3',
+        kind: 'Agent',
+        metadata: {
+          name: a.name,
+          namespace: this.namespace,
+          labels: { 'app.kubernetes.io/managed-by': 'agentic-demo' },
+        },
+        spec,
+      };
+    });
   }
 
   async deploy() {

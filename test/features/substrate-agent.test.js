@@ -226,3 +226,66 @@ describe('substrate-agent snapshots', () => {
     expect(f.buildHarness().spec.substrate.snapshotPolicy.location).toBe('gs://custom/path/');
   });
 });
+
+const SKILL_OCI =
+  'ghcr.io/example/skills/brand-check@sha256:0ef67974d39518b18de074bd9762fb4aea9764fc8836eeb45d7868b358eecb30';
+
+describe('substrate-agent skills and egressPolicyRefs', () => {
+  it('builds no spec.skills/egressPolicyRefs when none are configured', () => {
+    const f = new SubstrateAgentFeature('substrate-agent', {
+      name: 'substrate-demo',
+      namespace: 'kagent',
+      image: IMG,
+      workerPoolName: 'kagent-default',
+    });
+    expect(f.buildAgentTemplates()[0].spec.skills).toBeUndefined();
+    expect(f.buildAgents()[0].spec.egressPolicyRefs).toBeUndefined();
+  });
+
+  it('builds AgentTemplate.spec.skills and Agent.spec.egressPolicyRefs when configured', () => {
+    const f = new SubstrateAgentFeature('substrate-agent', {
+      name: 'substrate-demo',
+      namespace: 'kagent',
+      image: IMG,
+      workerPoolName: 'kagent-default',
+      agents: [
+        {
+          name: 'trust-safety',
+          skills: [{ name: 'brand-check', oci: SKILL_OCI }],
+          egressPolicyRefs: ['brand-registry-access'],
+        },
+      ],
+    });
+    const tpl = f.buildAgentTemplates()[0];
+    expect(tpl.spec.skills).toEqual([{ name: 'brand-check', source: { oci: SKILL_OCI } }]);
+    const agent = f.buildAgents()[0];
+    expect(agent.spec.egressPolicyRefs).toEqual([{ name: 'brand-registry-access' }]);
+  });
+
+  it('rejects a skill with a non-digest-pinned oci ref', () => {
+    const f = new SubstrateAgentFeature('substrate-agent', {
+      name: 'substrate-demo',
+      namespace: 'kagent',
+      image: IMG,
+      workerPoolName: 'kagent-default',
+      agents: [
+        {
+          name: 'trust-safety',
+          skills: [{ name: 'brand-check', oci: 'ghcr.io/example/skills/brand-check:latest' }],
+        },
+      ],
+    });
+    expect(() => f.validate()).toThrow(/digest-pinned/);
+  });
+
+  it('rejects an empty egressPolicyRefs entry', () => {
+    const f = new SubstrateAgentFeature('substrate-agent', {
+      name: 'substrate-demo',
+      namespace: 'kagent',
+      image: IMG,
+      workerPoolName: 'kagent-default',
+      agents: [{ name: 'trust-safety', egressPolicyRefs: [''] }],
+    });
+    expect(() => f.validate()).toThrow(/egressPolicyRefs/);
+  });
+});
