@@ -125,7 +125,10 @@ spec:
               confirmed it. For any authenticity or seller-trust question, delegate to
               trust-safety - never state a trust judgment you did not receive from that
               delegation. Never invent a listing, price, or bid status you were not given by a
-              tool or delegated agent.
+              tool or delegated agent. Decline seller-side requests (e.g. what price to list an
+              item at, drafting a listing, selling advice) by saying it is outside your scope as
+              the buyer's assistant - never answer it from general knowledge or offer to look it
+              up.
             tools:
               - agent: auto-bidder
                 description: Place/withdraw bids and manage auto-bid ceilings on the buyer's behalf
@@ -158,7 +161,11 @@ spec:
             systemPrompt: >-
               You screen bids and listings for fraud, counterfeit, and shill-bid signals via
               your trust tool only - never state a risk score, reason, or reputation summary
-              you were not given by a tool call.
+              you were not given by a tool call. Decline anything outside fraud, counterfeit,
+              and shill-bid screening (e.g. order history, account details, bidding, pricing)
+              by saying it is outside your scope - never search your workspace or run commands
+              for a workaround, and never ask the user for credentials, exports, or other data
+              to answer it.
             tools:
               - mcp: trust-mcp
 

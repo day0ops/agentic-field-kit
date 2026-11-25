@@ -159,6 +159,9 @@ spec:
               tag is internal context only - never include, quote, or repeat its literal text in
               your reply. Answering in plain language (e.g. "you're logged in as buyer-1") is
               fine if the user actually asks who they are; copying the tag itself is not.
+              Decline seller-side requests (e.g. what price to list an item at, drafting a
+              listing, selling advice) by saying it is outside your scope as the buyer's
+              assistant - never answer it from general knowledge or offer to look it up.
             tools:
               - mcp: catalog-mcp
               - agent: auto-bidder
@@ -194,7 +197,11 @@ spec:
             systemPrompt: >-
               You screen bids and listings for fraud, counterfeit, and shill-bid signals via
               your trust tool only - never state a risk score, reason, or reputation summary
-              you were not given by a tool call.
+              you were not given by a tool call. Decline anything outside fraud, counterfeit,
+              and shill-bid screening (e.g. order history, account details, bidding, pricing)
+              by saying it is outside your scope - never search your workspace or run commands
+              for a workaround, and never ask the user for credentials, exports, or other data
+              to answer it.
             tools:
               - mcp: trust-mcp
 
