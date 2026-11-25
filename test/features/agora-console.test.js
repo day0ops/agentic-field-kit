@@ -395,3 +395,95 @@ describe('agora-console with exposeDirectly: false', () => {
     expect(deleted).toEqual(['service', 'deployment', 'service', 'deployment']);
   });
 });
+
+// manageEgressPolicies is a third independent opt-in trigger for the base
+// ServiceAccount/Role/RoleBinding trio, alongside ateApiEndpoint - set alone
+// (no ateApiEndpoint), it should still wire serviceAccountName and the base
+// RBAC objects, but not the ate-token-specific Role/RoleBinding. Its own
+// egresspolicies grant is a SEPARATE Role/RoleBinding in agentNamespace, not
+// a rule folded into the base Role in this.namespace - EgressPolicy
+// resolves in the Agent's own namespace, which can differ from where the
+// console itself is deployed (agentNamespace is deliberately different from
+// namespace in this fixture, to catch exactly that bug class).
+describe('agora-console with manageEgressPolicies configured (no ateApiEndpoint)', () => {
+  const f = new AgoraConsoleFeature('agora-console', {
+    namespace: 'agora-demo',
+    agentNamespace: 'kagent-system',
+    catalogApiImage: 'example.com/catalog-api:v1',
+    consoleImage: 'example.com/console:v1',
+    hostname: 'agora.example.com',
+    manageEgressPolicies: true,
+  });
+
+  it('does not add an egresspolicies rule to the base Role', () => {
+    const role = f.buildRole();
+    expect(role.metadata.namespace).toBe('agora-demo');
+    expect(role.rules).toEqual([
+      {
+        apiGroups: ['api.kagent.dev'],
+        resources: ['agenttemplates', 'harnesses'],
+        verbs: ['get', 'list', 'watch'],
+      },
+      {
+        apiGroups: ['ate.dev'],
+        resources: ['workerpools'],
+        verbs: ['get', 'list', 'watch'],
+      },
+    ]);
+  });
+
+  it('builds a separate egress-policy Role/RoleBinding in agentNamespace, not this.namespace', () => {
+    const role = f.buildEgressPolicyRole();
+    expect(role.metadata.namespace).toBe('kagent-system');
+    expect(role.rules).toEqual([
+      {
+        apiGroups: ['api.kagent.dev'],
+        resources: ['egresspolicies'],
+        verbs: ['get', 'create', 'patch', 'delete'],
+      },
+    ]);
+    const rb = f.buildEgressPolicyRoleBinding();
+    expect(rb.metadata.namespace).toBe('kagent-system');
+    expect(rb.subjects).toEqual([
+      { kind: 'ServiceAccount', name: 'agora-console', namespace: 'agora-demo' },
+    ]);
+  });
+
+  it('sets serviceAccountName on the console Deployment even without ateApiEndpoint', () => {
+    const d = f.buildConsoleDeployment();
+    expect(d.spec.template.spec.serviceAccountName).toBe('agora-console');
+  });
+
+  it('deploy() applies the base ServiceAccount/Role/RoleBinding and the egress-policy Role/RoleBinding, but not the ate-token Role/RoleBinding', async () => {
+    const applied = [];
+    f.applyResource = async resource => applied.push(resource.kind);
+    f.log = () => {};
+    await f.deploy();
+    expect(applied).toContain('ServiceAccount');
+    expect(applied.filter(k => k === 'Role')).toHaveLength(2);
+    expect(applied.filter(k => k === 'RoleBinding')).toHaveLength(2);
+  });
+
+  it('cleanup() deletes the egresspolicy object itself plus both Role/RoleBinding pairs, but not the ate-token Role/RoleBinding', async () => {
+    const deleted = [];
+    f.deleteResource = async kind => deleted.push(kind);
+    f.log = () => {};
+    await f.cleanup();
+    expect(deleted).toContain('egresspolicy');
+    expect(deleted).toContain('serviceaccount');
+    expect(deleted.filter(k => k === 'role')).toHaveLength(2);
+    expect(deleted.filter(k => k === 'rolebinding')).toHaveLength(2);
+  });
+});
+
+describe('agora-console with neither ateApiEndpoint nor manageEgressPolicies', () => {
+  it('builds a Role with only the base agenttemplates/harnesses/workerpools rules', () => {
+    const f = new AgoraConsoleFeature('agora-console', {
+      namespace: 'agora-demo',
+      catalogApiImage: 'example.com/catalog-api:v1',
+      consoleImage: 'example.com/console:v1',
+      hostname: 'agora.example.com',
+    });
+    expect(f.buildRole().rules).toHaveLength(2);
+  });
+});

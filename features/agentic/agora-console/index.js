@@ -31,6 +31,16 @@ import { nlbSourceRangeAnnotations } from '../../../src/lib/common.js';
  *   are deliberately never exposed on - see console/isolation_probe.go).
  *   Needs no K8s RBAC of its own, only the Keycloak client (config/profiles
  *   realm config) and a kagent-rbac-policy grant for its group.
+ * - `manageEgressPolicies: true`: Operator Studio's egress-check probe gets a
+ *   ServiceAccount (shared with ateApiEndpoint, if also set) plus its own
+ *   Role/RoleBinding (get/create/patch/delete on api.kagent.dev EgressPolicy)
+ *   to create/delete the brand-registry-access EgressPolicy via the
+ *   Kubernetes API directly (console/egress_probe.go) - this is kagent's own
+ *   CRD, reconciled by kagent-controller regardless of who writes it, the
+ *   same as a human running `kubectl apply`/`kubectl delete` would. This
+ *   RBAC grant is placed in agentNamespace, not this.namespace -
+ *   EgressPolicy resolves in the Agent's own namespace, a different concept
+ *   from where the console itself runs (see buildEgressPolicyRole).
  *
  * Deliberately a Feature, not an `extras/applications` entry, for the same
  * reason fraud-ops-console is: `requires.applications`' whole-namespace-delete
@@ -118,6 +128,9 @@ import { nlbSourceRangeAnnotations } from '../../../src/lib/common.js';
  *                              // calls (never the public agentgateway-routed one trust-safety/
  *                              // auto-bidder are deliberately never exposed on). Default:
  *                              // http://kagent-controller.<agentNamespace>.svc.cluster.local:8083/agents/<agentNamespace>
+ *   manageEgressPolicies: boolean, // Default: false -- enables the Operator Studio egress-check
+ *                              // probe's create/delete access to api.kagent.dev EgressPolicy
+ *                              // objects in this.namespace (see the class doc comment).
  * }
  */
 export class AgoraConsoleFeature extends Feature {
@@ -156,6 +169,14 @@ export class AgoraConsoleFeature extends Feature {
     this.kagentControllerBaseUrl =
       config.kagentControllerBaseUrl ||
       `http://kagent-controller.${this.agentNamespace}.svc.cluster.local:8083/agents/${this.agentNamespace}`;
+
+    // Enables Operator Studio's egress-check probe to create/delete the
+    // brand-registry-access EgressPolicy directly via the Kubernetes API
+    // (server-side apply/delete through client-go, never a kubectl subprocess)
+    // -- adds one more rule to this feature's existing Role rather than a
+    // separate one, since EgressPolicy lives in this.namespace, same as the
+    // ate-token-independent Role below.
+    this.manageEgressPolicies = !!config.manageEgressPolicies;
   }
 
   getFeaturePath() {
@@ -184,8 +205,8 @@ export class AgoraConsoleFeature extends Feature {
 
   // buildServiceAccount/buildRole/buildRoleBinding/buildAteTokenRole/
   // buildAteTokenRoleBinding mirror fraud-ops-console's own RBAC methods of
-  // the same shape - only applied by deploy() when ateApiEndpoint is set
-  // (see the class doc comment).
+  // the same shape - applied by deploy() when ateApiEndpoint or
+  // manageEgressPolicies is set (see the class doc comment).
   buildServiceAccount() {
     return {
       apiVersion: 'v1',
@@ -201,8 +222,17 @@ export class AgoraConsoleFeature extends Feature {
       metadata: { name: 'agora-console', namespace: this.namespace },
       rules: [
         {
-          apiGroups: ['kagent.dev', 'ate.dev'],
-          resources: ['agenttemplates', 'harnesses', 'workerpools'],
+          // AgentTemplate/Harness are api.kagent.dev, not kagent.dev -- confirmed
+          // live via `kubectl api-resources` (2026-11-25). The original rule's
+          // apiGroups/resources cross-product never actually matched either CRD,
+          // so this read access was silently ineffective until this fix.
+          apiGroups: ['api.kagent.dev'],
+          resources: ['agenttemplates', 'harnesses'],
+          verbs: ['get', 'list', 'watch'],
+        },
+        {
+          apiGroups: ['ate.dev'],
+          resources: ['workerpools'],
           verbs: ['get', 'list', 'watch'],
         },
       ],
@@ -215,6 +245,44 @@ export class AgoraConsoleFeature extends Feature {
       kind: 'RoleBinding',
       metadata: { name: 'agora-console', namespace: this.namespace },
       roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'agora-console' },
+      subjects: [{ kind: 'ServiceAccount', name: 'agora-console', namespace: this.namespace }],
+    };
+  }
+
+  // buildEgressPolicyRole/buildEgressPolicyRoleBinding grant this feature's
+  // own ServiceAccount create/patch/delete access to the EgressPolicy the
+  // egress-check probe grants/revokes (console/egress_policy_client.go) --
+  // placed in agentNamespace, not this.namespace, since EgressPolicy
+  // resolves in the Agent's own namespace, the same "different concepts
+  // that only happen to coincide" distinction buildAteTokenRole already
+  // makes for ateNamespace. `patch` is required because server-side apply is
+  // implemented as a patch request; the apiserver separately checks `create`
+  // on a patch that would create a missing object.
+  buildEgressPolicyRole() {
+    return {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'Role',
+      metadata: { name: 'agora-console-egress-policy', namespace: this.agentNamespace },
+      rules: [
+        {
+          apiGroups: ['api.kagent.dev'],
+          resources: ['egresspolicies'],
+          verbs: ['get', 'create', 'patch', 'delete'],
+        },
+      ],
+    };
+  }
+
+  buildEgressPolicyRoleBinding() {
+    return {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'RoleBinding',
+      metadata: { name: 'agora-console-egress-policy', namespace: this.agentNamespace },
+      roleRef: {
+        apiGroup: 'rbac.authorization.k8s.io',
+        kind: 'Role',
+        name: 'agora-console-egress-policy',
+      },
       subjects: [{ kind: 'ServiceAccount', name: 'agora-console', namespace: this.namespace }],
     };
   }
@@ -336,7 +404,9 @@ export class AgoraConsoleFeature extends Feature {
         template: {
           metadata: { labels: { app: 'console' } },
           spec: {
-            ...(this.ateApiEndpoint ? { serviceAccountName: 'agora-console' } : {}),
+            ...(this.ateApiEndpoint || this.manageEgressPolicies
+              ? { serviceAccountName: 'agora-console' }
+              : {}),
             // ate-ca/ate-token back the native gRPC ate-api client; kubelet
             // rotates both, so the console never mints/refreshes anything.
             // optional: true avoids blocking pod startup if no bundle matches.
@@ -424,6 +494,16 @@ export class AgoraConsoleFeature extends Feature {
                           },
                         },
                         { name: 'KAGENT_PROBE_BASE_URL', value: this.kagentControllerBaseUrl },
+                      ]
+                    : []),
+                  ...(this.manageEgressPolicies
+                    ? [
+                        { name: 'MANAGE_EGRESS_POLICIES', value: 'true' },
+                        // Omitted when ateApiEndpoint already set it above -- a duplicate
+                        // env var name is harmless to Kubernetes, but pointless here.
+                        ...(this.ateApiEndpoint
+                          ? []
+                          : [{ name: 'AGORA_ATESPACE', value: this.agentNamespace }]),
                       ]
                     : []),
                 ],
@@ -556,12 +636,18 @@ export class AgoraConsoleFeature extends Feature {
   }
 
   async deploy() {
-    if (this.ateApiEndpoint) {
+    if (this.ateApiEndpoint || this.manageEgressPolicies) {
       await this.applyResource(this.buildServiceAccount());
       await this.applyResource(this.buildRole());
       await this.applyResource(this.buildRoleBinding());
+    }
+    if (this.ateApiEndpoint) {
       await this.applyResource(this.buildAteTokenRole());
       await this.applyResource(this.buildAteTokenRoleBinding());
+    }
+    if (this.manageEgressPolicies) {
+      await this.applyResource(this.buildEgressPolicyRole());
+      await this.applyResource(this.buildEgressPolicyRoleBinding());
     }
     if (this.systemKeycloak) {
       await this.applyResource(this.buildSystemKeycloakSecret());
@@ -604,6 +690,18 @@ export class AgoraConsoleFeature extends Feature {
     if (this.ateApiEndpoint) {
       await this.deleteResource('rolebinding', 'agora-console-ate-token', this.ateNamespace);
       await this.deleteResource('role', 'agora-console-ate-token', this.ateNamespace);
+    }
+    if (this.manageEgressPolicies) {
+      // Deletes the runtime-created brand-registry-access EgressPolicy itself
+      // (console/egress_policy_client.go creates it, not this feature) -- without
+      // this, a redeploy starts the egress-check demo already granted instead of
+      // denied-by-default, since the Agents' egressPolicyRefs resolve as soon as
+      // a policy by that name exists again.
+      await this.deleteResource('egresspolicy', 'brand-registry-access', this.agentNamespace);
+      await this.deleteResource('rolebinding', 'agora-console-egress-policy', this.agentNamespace);
+      await this.deleteResource('role', 'agora-console-egress-policy', this.agentNamespace);
+    }
+    if (this.ateApiEndpoint || this.manageEgressPolicies) {
       await this.deleteResource('rolebinding', 'agora-console', this.namespace);
       await this.deleteResource('role', 'agora-console', this.namespace);
       await this.deleteResource('serviceaccount', 'agora-console', this.namespace);
