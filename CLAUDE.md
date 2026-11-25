@@ -54,6 +54,7 @@ export AGENTREGISTRY_REALM_DEFAULT_PASSWORD=<password> # Required only when an '
 export RETAIL_RETURNS_CUSTOMER_PASSWORD=<password> # Required only when a 'retail-returns-customers' realm is configured
 export CARRIER_PORTAL_REALM_DEFAULT_PASSWORD=<password> # Required only when a 'carrier-portal' realm is configured
 export AGORA_CUSTOMER_PASSWORD=<password>    # Required only when demo-buyer/demo-seller/demo-operator users are configured (per-user override, not a separate realm)
+export BRAND_REGISTRY_API_KEY=<key>          # Required only for agora-demo-eks (brand-registry mock service + its EgressPolicy authentication.secretKeyRef)
 
 # telemetry addon, full mode (no defaults - deploy fails cleanly if unset)
 export GRAFANA_ADMIN_USERNAME=<user>         # Grafana admin login username

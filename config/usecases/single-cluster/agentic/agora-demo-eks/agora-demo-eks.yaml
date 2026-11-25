@@ -8,6 +8,13 @@ spec:
   infra: eks-single-cluster-substrate
   category: agentic
 
+  requires:
+    applications:
+      # Mock external brand/counterfeit registry for the egress-policy demo -
+      # a plain Deployment outside kagent/Substrate, not an AgentRegistry entry.
+      - name: brand-registry
+        namespace: brand-registry
+
   features:
     # Every MCP server below is fronted by agentgateway (mcp-gateway-route) and
     # auth-enforced (token-exchange-policy, further down). tokenPassthrough forwards
@@ -131,6 +138,16 @@ spec:
                 description: Place/withdraw bids and manage auto-bid ceilings on the buyer's behalf
               - agent: trust-safety
                 description: Answer authenticity and seller-trust questions
+            # A delegated trust-safety call runs inside this Agent's own actor -- its own
+            # egressPolicyRefs is what governs that runtime's grants, not trust-safety's (see
+            # the comment on trust-safety's own egressPolicyRefs below). Also reaches
+            # auto-bidder, which shares this same runtime -- accepted, not worked around. Both
+            # also inherit this runtime's own bash tool, so once granted, a buyer could in
+            # principle prompt either into an authenticated call to brand-registry -- harmless
+            # against a mock registry, but worth remembering before pointing this pattern at a
+            # real credentialed destination.
+            egressPolicyRefs:
+              - brand-registry-access
           - name: auto-bidder
             description: Proxy-bids on a buyer's behalf up to a stated maximum
             systemPrompt: >-
@@ -158,9 +175,25 @@ spec:
             systemPrompt: >-
               You screen bids and listings for fraud, counterfeit, and shill-bid signals via
               your trust tool only - never state a risk score, reason, or reputation summary
-              you were not given by a tool call.
+              you were not given by a tool call. For a branded item's authenticity, run the
+              brand-check skill against its listing ID and report exactly what it returns -
+              if it reports unavailable, say verification is unavailable under current policy,
+              never guess a verdict.
             tools:
               - mcp: trust-mcp
+            # OCI artifact, not a RemoteMCPServer tool -- unlike trust-mcp above, this is
+            # unreachable until a manual EgressPolicy named brand-registry-access grants it
+            # (see agora-console's own grant/revoke action). A RemoteMCPServer would instead
+            # auto-grant its own host at compile time, which defeats the point of this demo.
+            skills:
+              - name: brand-check
+                oci: '{{env.images.agoraDemo.brandCheckSkill}}'
+            # Also on shopping-assistant below: a delegated sub-agent call runs inside its
+            # parent's own Substrate actor, so egressPolicyRefs must be granted by whichever
+            # Agent is root for that runtime -- trust-safety's own ref only takes effect when
+            # it is root itself (e.g. a direct kagent-ui chat or Agora's own operator probe).
+            egressPolicyRefs:
+              - brand-registry-access
 
     - name: agora-console
       description: Agora console (buyer storefront, seller dashboard, operator view)
@@ -193,6 +226,9 @@ spec:
           hostname: '{{env.domains.core.keycloak}}'
           clientId: agora-console-system
           clientSecret: agora-console-system-secret
+        # Enables Operator Studio's egress-check probe to create/delete the
+        # brand-registry-access EgressPolicy directly via the Kubernetes API.
+        manageEgressPolicies: true
 
     - name: oidc-gateway
       description: Keycloak login gate for the Agora console's /account prefix (buyer/seller/operator actions)
@@ -351,6 +387,24 @@ spec:
             accessLevel: view
           - resource: sessions
             accessLevel: manage
+
+    # Same value, two namespaces: brand-registry's own Deployment reads it as its
+    # API_KEY env var; the brand-registry-access EgressPolicy (created live by the
+    # console) references the kagent-system copy via authentication.secretKeyRef.
+    - name: env-secret
+      description: API key the brand-registry mock requires on every /v1/check call
+      config:
+        secretName: brand-registry-api-key
+        namespace: brand-registry
+        key: key
+        envVar: BRAND_REGISTRY_API_KEY
+    - name: env-secret
+      description: Same brand-registry API key, in kagent-system for the EgressPolicy's authentication.secretKeyRef
+      config:
+        secretName: brand-registry-api-key
+        namespace: kagent-system
+        key: key
+        envVar: BRAND_REGISTRY_API_KEY
 
   tests:
     - name: swarm-ready
