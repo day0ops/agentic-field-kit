@@ -127,13 +127,16 @@ spec:
       repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
       chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
     agoraDemo:
-      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.0
-      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.0
-      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.0
-      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.0
-      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.0
-      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.0
-      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.0
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.1
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.1
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.1
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.1
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.1
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.1
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.1
+      brandRegistry: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-brand-registry:v0.1.1
+      # Digest-pinned OCI Skill artifact - required by AgentTemplate.spec.skills[].source.oci (not a version tag).
+      brandCheckSkill: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-skills/brand-check@sha256:9c14d9cab7c299ab414ef3617d5cb315ad2a33b534b99c41d25fd0238c1d53a4
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
