@@ -64,14 +64,14 @@ spec:
     # release's release-manifest.json asset, not GHCR's upstream OSS tags).
     kagentHarness: us-docker.pkg.dev/solo-public/kagent-enterprise/golang-adk@sha256:383d602b3640e49229cdb2ebf6f7bb3e8bcd16429ac9a88e03c57c0d8e6954ae
     agoraDemo:
-      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.0
-      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.0
-      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.0
-      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.0
-      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.0
-      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.0
-      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.0
-      brandRegistry: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-brand-registry:v0.1.0
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.2
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.2
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.2
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.2
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.2
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.2
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.2
+      brandRegistry: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-brand-registry:v0.1.2
       # Digest-pinned OCI Skill artifact - required by AgentTemplate.spec.skills[].source.oci (not a version tag).
       brandCheckSkill: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-skills/brand-check@sha256:9c14d9cab7c299ab414ef3617d5cb315ad2a33b534b99c41d25fd0238c1d53a4
 

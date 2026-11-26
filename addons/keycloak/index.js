@@ -102,7 +102,7 @@ const POSTGRES_VERSION = '18.2-alpine';
  *   AGENTREGISTRY_REALM_DEFAULT_PASSWORD  - agentregistry demo user password
  *   RETAIL_RETURNS_CUSTOMER_PASSWORD      - retail-returns-customers demo-customer password
  *   CARRIER_PORTAL_REALM_DEFAULT_PASSWORD - carrier-portal demo-carrier-customer password
- *   AGORA_CUSTOMER_PASSWORD               - demo-buyer/demo-seller/demo-operator password
+ *   AGORA_CUSTOMER_PASSWORD               - demo-buyer/demo-buyer2/demo-operator password
  *                                           (users in the 'kagent' realm, not a realm-level
  *                                           override -- see userPasswordOverrides)
  */
@@ -162,14 +162,14 @@ export class KeycloakFeature extends AddonFeature {
       r => r.realm === 'retail-returns-customers'
     );
     this.hasCarrierPortalRealm = (config.realms || []).some(r => r.realm === 'carrier-portal');
-    // Unlike the realm-scoped flags above, these two users share the 'kagent' realm with
+    // Unlike the realm-scoped flags above, these users share the 'kagent' realm with
     // kagent-admin/writer/reader -- detected by username, not realm, since their password
     // must come from its own env var regardless of which realm config declares them in.
     this.hasAgoraCustomerUsers = (config.realms || []).some(r =>
       (r.users || []).some(
         u =>
           u.username === 'demo-buyer' ||
-          u.username === 'demo-seller' ||
+          u.username === 'demo-buyer2' ||
           u.username === 'demo-operator'
       )
     );
@@ -959,13 +959,12 @@ export class KeycloakFeature extends AddonFeature {
     };
     // Individual users whose password must come from their own env var rather than the
     // realm's defaultPassword -- for users sharing a realm with others (e.g. agora's
-    // demo-buyer/demo-seller/demo-operator living in the 'kagent' realm alongside
+    // demo-buyer/demo-buyer2/demo-operator living in the 'kagent' realm alongside
     // kagent-admin) whose credentials shouldn't rotate together with that realm's other,
     // unrelated users.
     const userPasswordOverrides = {
       'demo-buyer': this.agoraCustomerPassword,
       'demo-buyer2': this.agoraCustomerPassword,
-      'demo-seller': this.agoraCustomerPassword,
       'demo-operator': this.agoraCustomerPassword,
     };
     const defaultPassword = realmPasswordOverrides[realm.realm] || realm.defaultPassword;

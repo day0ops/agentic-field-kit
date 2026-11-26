@@ -66,21 +66,21 @@ export function envVarsFor(addonCfg, _clusterName) {
       vars.push({ name: envVar, description, required: true });
     }
   }
-  // Per-user, not per-realm: demo-buyer/demo-seller/demo-operator share the 'kagent' realm
+  // Per-user, not per-realm: demo-buyer/demo-buyer2/demo-operator share the 'kagent' realm
   // with kagent-admin/writer/reader but need their own password, independent of that realm's.
   if (
     (addonCfg?.config?.realms || []).some(r =>
       (r.users || []).some(
         u =>
           u.username === 'demo-buyer' ||
-          u.username === 'demo-seller' ||
+          u.username === 'demo-buyer2' ||
           u.username === 'demo-operator'
       )
     )
   ) {
     vars.push({
       name: 'AGORA_CUSTOMER_PASSWORD',
-      description: 'demo-buyer/demo-seller/demo-operator password',
+      description: 'demo-buyer/demo-buyer2/demo-operator password',
       required: true,
     });
   }
@@ -339,7 +339,7 @@ kubectl wait certificate/${tlsSecretName} -n ${ns} \\
     // realm with others whose password shouldn't move together with theirs.
     const USER_PASSWORD_ENV_VARS = {
       'demo-buyer': 'AGORA_CUSTOMER_PASSWORD',
-      'demo-seller': 'AGORA_CUSTOMER_PASSWORD',
+      'demo-buyer2': 'AGORA_CUSTOMER_PASSWORD',
       'demo-operator': 'AGORA_CUSTOMER_PASSWORD',
     };
     const userLines = users

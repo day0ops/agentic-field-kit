@@ -61,8 +61,10 @@ spec:
           - realm: kagent
             # fixture_id claim carries each user's real fixtures.Buyer/Seller ID (e.g.
             # "buyer-1"), used by agora-mcp-bid-identity's CEL check in agora-demo.yaml.
+            # seller_tier drives the console's "Pro pricing assistant" badge.
             customAttributes:
               - fixture_id
+              - seller_tier
             groups:
               - kagent-admins
               - kagent-writers
@@ -162,31 +164,31 @@ spec:
                 lastName: Reader
                 memberOf:
                   - kagent-readers
+              # Both demo marketplace accounts carry buying AND selling rights, like a real
+              # marketplace account - not split into separate buyer-only/seller-only identities.
+              # fixture_id and seller_tier are forwarded as token claims and read directly by
+              # console/identity.go - no per-username mapping lives in agora's own code.
               - username: demo-buyer
                 email: demo-buyer@example.com
                 firstName: Demo
                 lastName: Buyer
                 memberOf:
                   - buyers
+                  - sellers
                 attributes:
                   fixture_id: buyer-1
-              # Second buyer identity, for live-auction demos with two real competing bidders.
+                  seller_tier: pro
+              # Second identity, for live-auction demos with two real competing bidders (also
+              # dual buy/sell rights, same as demo-buyer).
               - username: demo-buyer2
                 email: demo-buyer2@example.com
                 firstName: Demo
                 lastName: Buyer2
                 memberOf:
                   - buyers
-                attributes:
-                  fixture_id: buyer-2
-              - username: demo-seller
-                email: demo-seller@example.com
-                firstName: Demo
-                lastName: Seller
-                memberOf:
                   - sellers
                 attributes:
-                  fixture_id: seller-1
+                  fixture_id: buyer-2
               - username: demo-operator
                 email: demo-operator@example.com
                 firstName: Demo
@@ -194,7 +196,7 @@ spec:
                 memberOf:
                   - operators
             # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile -- except
-            # demo-buyer/demo-seller/demo-operator, which use AGORA_CUSTOMER_PASSWORD instead
+            # demo-buyer/demo-buyer2/demo-operator, which use AGORA_CUSTOMER_PASSWORD instead
             # (per-user override, see addons/keycloak/index.js's userPasswordOverrides)
 
     - name: kagent

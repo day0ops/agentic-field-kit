@@ -75,8 +75,10 @@ spec:
           - realm: kagent
             # fixture_id claim carries each user's real fixtures.Buyer/Seller ID (e.g.
             # "buyer-1"), used by agora-mcp-bid-identity's CEL check in agora-demo-eks.yaml.
+            # seller_tier drives the console's "Pro pricing assistant" badge.
             customAttributes:
               - fixture_id
+              - seller_tier
             groups:
               - kagent-admins
               - kagent-writers
@@ -178,8 +180,8 @@ spec:
                   - kagent-readers
               # Both demo marketplace accounts carry buying AND selling rights, like a real
               # marketplace account - not split into separate buyer-only/seller-only identities.
-              # console/identity.go's demoAccountsByUsername maps this same fixture_id to both
-              # buyerId (bidding) and sellerId (listings).
+              # fixture_id and seller_tier are forwarded as token claims and read directly by
+              # console/identity.go - no per-username mapping lives in agora's own code.
               - username: demo-buyer
                 email: demo-buyer@example.com
                 firstName: Demo
@@ -189,6 +191,7 @@ spec:
                   - sellers
                 attributes:
                   fixture_id: buyer-1
+                  seller_tier: pro
               # Second identity, for live-auction demos with two real competing bidders (also
               # dual buy/sell rights, same as demo-buyer).
               - username: demo-buyer2
