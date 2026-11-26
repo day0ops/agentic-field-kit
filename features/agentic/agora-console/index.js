@@ -420,7 +420,9 @@ export class AgoraConsoleFeature extends Feature {
                           {
                             clusterTrustBundle: {
                               signerName: 'servicedns.podcert.ate.dev/identity',
-                              labelSelector: { matchLabels: { 'podcert.ate.dev/canarying': 'live' } },
+                              labelSelector: {
+                                matchLabels: { 'podcert.ate.dev/canarying': 'live' },
+                              },
                               path: 'trust-bundle.pem',
                               optional: true,
                             },

@@ -188,7 +188,11 @@ describe('agora-console with ateApiEndpoint configured', () => {
     });
     const mounts = d.spec.template.spec.containers[0].volumeMounts;
     expect(mounts).toContainEqual({ name: 'ate-ca', mountPath: '/var/run/ate/ca', readOnly: true });
-    expect(mounts).toContainEqual({ name: 'ate-token', mountPath: '/var/run/ate/token', readOnly: true });
+    expect(mounts).toContainEqual({
+      name: 'ate-token',
+      mountPath: '/var/run/ate/token',
+      readOnly: true,
+    });
   });
 
   it('wires AGORA_ATESPACE and KAGENT_PROBE_BASE_URL from an explicit agentNamespace config field when set', () => {

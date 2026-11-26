@@ -9,9 +9,9 @@ describe('nlbSourceRangeAnnotations', () => {
 
   it('always enables cross-zone load balancing when it returns annotations, so a single-replica backend is reachable regardless of which AZ the NLB receives traffic through', () => {
     const annotations = nlbSourceRangeAnnotations(['10.0.0.0/8']);
-    expect(annotations['service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled']).toBe(
-      'true'
-    );
+    expect(
+      annotations['service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled']
+    ).toBe('true');
   });
 
   it('joins a flat list of CIDRs into the source-ranges annotation', () => {
