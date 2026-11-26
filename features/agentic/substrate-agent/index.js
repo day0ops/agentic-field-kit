@@ -45,6 +45,12 @@ const DIGEST_PIN_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/;
  *   name: string,               // Harness resource name. Default: 'substrate-demo'
  *   namespace: string,          // Required -- must match the kagent addon's namespace
  *   image: string,              // Required -- digest-pinned Harness workload image
+ *   env: [{ name, value }],     // Optional -- passed through unchanged to Harness.spec.env
+ *                                // (RuntimeEnvVar). e.g. set OTEL_PROPAGATORS to
+ *                                // 'tracecontext,baggage' so the runtime's W3C baggage
+ *                                // (gen_ai.conversation.id/a2a.task.id/gen_ai.tool.call.id)
+ *                                // actually leaves the process on outbound MCP calls --
+ *                                // the default is 'tracecontext' only.
  *   modelConfigRef: string,     // Default: 'default-model-config' (single-agent mode)
  *   workerPoolName: string,     // Default: 'kagent-default'
  *   workerImage: string,        // Optional -- if set, this feature also creates its own WorkerPool named workerPoolName
@@ -128,6 +134,7 @@ export class SubstrateAgentFeature extends Feature {
       : null;
     this.defaultModelConfigRef =
       config.modelConfigRef || this.modelConfigName || 'default-model-config';
+    this.env = config.env || null;
 
     if (Array.isArray(config.agents) && config.agents.length > 0) {
       this.agents = config.agents;
@@ -276,6 +283,7 @@ export class SubstrateAgentFeature extends Feature {
           workerPoolRef: { name: this.workerPoolName },
           snapshotPolicy: { location: this.snapshotLocation },
         },
+        ...(this.env ? { env: this.env } : {}),
       },
     };
   }

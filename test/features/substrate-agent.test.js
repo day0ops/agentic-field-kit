@@ -289,3 +289,28 @@ describe('substrate-agent skills and egressPolicyRefs', () => {
     expect(() => f.validate()).toThrow(/egressPolicyRefs/);
   });
 });
+
+describe('substrate-agent env', () => {
+  it('builds no Harness.spec.env when env is not configured', () => {
+    const f = new SubstrateAgentFeature('substrate-agent', {
+      name: 'substrate-demo',
+      namespace: 'kagent',
+      image: IMG,
+      workerPoolName: 'kagent-default',
+    });
+    expect(f.buildHarness().spec.env).toBeUndefined();
+  });
+
+  it('passes config.env through to Harness.spec.env unchanged', () => {
+    const f = new SubstrateAgentFeature('substrate-agent', {
+      name: 'substrate-demo',
+      namespace: 'kagent',
+      image: IMG,
+      workerPoolName: 'kagent-default',
+      env: [{ name: 'OTEL_PROPAGATORS', value: 'tracecontext,baggage' }],
+    });
+    expect(f.buildHarness().spec.env).toEqual([
+      { name: 'OTEL_PROPAGATORS', value: 'tracecontext,baggage' },
+    ]);
+  });
+});

@@ -118,7 +118,14 @@ spec:
         image: '{{env.images.kagentHarness}}'
         workerPoolName: agora-workers
         workerImage: 'us-docker.pkg.dev/solo-public/substrate-enterprise/ateworker-gvisor:v{{env.substrate.version}}'
-        workerPoolReplicas: 2
+        workerPoolReplicas: 1
+        # Carries a per-turn correlation id (a2a.task.id) as W3C baggage on every
+        # outbound MCP tool call - live-confirmed (2026-11-26) to survive the
+        # agentgateway hop unchanged, both as a baggage header and in the JSON-RPC
+        # _meta. Default propagators are tracecontext-only, which drops baggage.
+        env:
+          - name: OTEL_PROPAGATORS
+            value: tracecontext,baggage
         modelConfigRef: default-model-config
         snapshots:
           bucket: '{{infra.clusters.demo.storage.bucket}}'
