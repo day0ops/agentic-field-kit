@@ -1,3 +1,17 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: agentic-critical-infra
+value: 1000000
+globalDefault: false
+description: >-
+  Keycloak and its Postgres so they always win a scheduling race against
+  bursty workloads sharing the same node - without this, postgres-pvc's
+  zone-pinned PV can strand its pod Pending behind whatever else already
+  filled up the only node in that zone (seen live: a scale-up left the one
+  matching-AZ node fully booked by other pods, so postgres never scheduled
+  and Keycloak/kagent-controller cascade-failed behind it).
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -60,6 +74,7 @@ spec:
         app: postgres
     spec:
       serviceAccountName: postgres
+      priorityClassName: agentic-critical-infra
       containers:
         - name: postgres
           image: 'postgres:{{POSTGRES_VERSION}}'
