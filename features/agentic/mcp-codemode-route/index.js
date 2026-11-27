@@ -1,4 +1,5 @@
 import { Feature } from '../../../src/lib/feature.js';
+import { McpToolPolicyFeature } from '../mcp-tool-policy/index.js';
 
 /**
  * McpCodemodeRouteFeature
@@ -90,6 +91,25 @@ export class McpCodemodeRouteFeature extends Feature {
     };
   }
 
+  /**
+   * This Backend has none of the primary route's JWT/token-exchange/PII-guardrail
+   * protections, so it's restricted to tools/list -- mcp.methodName distinguishes
+   * list from call (confirmed against agentgateway-enterprise's rbac.rs), and
+   * authorization runs on tools/list too (one check per listed tool), so Require
+   * here still lets the UI enumerate tools while denying every tools/call,
+   * including codeMode's own code-execution meta-tool.
+   */
+  buildToolPolicyFeature() {
+    return new McpToolPolicyFeature('mcp-tool-policy', {
+      policyName: `${this.backendName}-tools-list-only`,
+      namespace: this.namespace,
+      staticBackendName: this.backendName,
+      action: 'Require',
+      matchExpressions: ["mcp.methodName == 'tools/list'"],
+      clusterContexts: this.clusterContexts,
+    });
+  }
+
   buildHTTPRoute() {
     return {
       apiVersion: 'gateway.networking.k8s.io/v1',
@@ -127,8 +147,11 @@ export class McpCodemodeRouteFeature extends Feature {
       await this.applyResource(this.buildBackend(), context);
       await this.applyResource(this.buildHTTPRoute(), context);
     }
+    const toolPolicy = this.buildToolPolicyFeature();
+    toolPolicy.validate();
+    await toolPolicy.deploy();
     this.log(
-      `codeMode route for MCP server '${this.serverName}' applied at ${this.pathPrefix} (entMcp, codeMode enabled)`,
+      `codeMode route for MCP server '${this.serverName}' applied at ${this.pathPrefix} (entMcp, codeMode enabled, restricted to tools/list)`,
       'success'
     );
   }
@@ -136,6 +159,7 @@ export class McpCodemodeRouteFeature extends Feature {
   async cleanup() {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
+    await this.buildToolPolicyFeature().cleanup();
     for (const context of contextsToDeploy) {
       await this.deleteResource('httproute', this.backendName, this.namespace, context);
       await this.deleteResource(

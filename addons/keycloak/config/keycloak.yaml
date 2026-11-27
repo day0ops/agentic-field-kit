@@ -44,6 +44,7 @@ spec:
       labels:
         app: keycloak
     spec:
+      priorityClassName: agentic-critical-infra
       containers:
         - name: keycloak
           image: '{{KEYCLOAK_IMAGE}}'

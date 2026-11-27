@@ -11,7 +11,7 @@ metadata:
 spec:
   infra: eks-multi-cluster
   environment: aws-dev
-  gatewayApiVersion: v1.5.0
+  gatewayApiVersion: v1.6.3
 
   mesh:
     istioVersion: 1.30.3
@@ -258,9 +258,9 @@ spec:
                         - service-account
                       groupMembership: true
                       serviceAccountGroup: agentregistry
-                    - clientId: kagent-backend
+                    - clientId: kagent-enterprise
                       type: confidential
-                      clientSecret: kagent-backend-secret
+                      clientSecret: kagent-enterprise-secret
                       flows:
                         - authorization-code
                       groupMembership: true
@@ -281,7 +281,10 @@ spec:
                       clientAttributes:
                         pkce.code.challenge.method: S256
                       groupMembership: true
-                      audience: kagent-backend
+                      # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                      # chart's own default) -- a client ID here instead of a dedicated audience
+                      # value makes the controller reject every token with a bare 401.
+                      audience: kagent-enterprise-api
                       redirectUris:
                         - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
                         - 'https://{{env.domains.core.agentgatewayUi}}/*'
@@ -408,8 +411,8 @@ spec:
                 # the same realm so the management UI's forwarded tokens are accepted by
                 # the kagent controller when proxying /api/proxy/cluster/<cluster>/api/*
                 issuerUrl: 'https://{{env.domains.core.keycloak}}/realms/kagent'
-                backendClientId: kagent-backend
-                backendClientSecret: kagent-backend-secret
+                backendClientId: kagent-enterprise
+                backendClientSecret: kagent-enterprise-secret
                 frontendClientId: kagent-ui
               # Maps Keycloak groups (kagent realm) → Solo UI roles.
               # Users in these groups get the corresponding Solo UI permission level.
@@ -429,15 +432,11 @@ spec:
                 agentgateway:
                   enabled: true
                   namespace: agentgateway-system
-                kagent:
-                  enabled: true
-                  namespace: kagent-system
               # Real per-product hostnames: the in-app product switcher is dead code in
               # production builds, so each product needs its own URLRewrite alias rather
-              # than relying on it.
+              # than relying on it. kagent's own UI is served directly by the kagent addon
+              # below (chart's absorbed UI, 2026.11.1+), not through solo-ui.
               productAliases:
-                - product: kagent
-                  hostname: '{{env.domains.core.kagentUi}}'
                 - product: agentgateway
                   hostname: '{{env.domains.core.agentgatewayUi}}'
                 - product: mesh
@@ -501,12 +500,12 @@ spec:
             version: '{{env.kagent.version}}'
             config:
               enterprise: true
+              hostname: '{{env.domains.core.kagentUi}}'
               oidc:
                 keycloakHostname: '{{env.domains.core.keycloak}}'
                 keycloakTlsEnabled: true
                 realm: kagent
-                clientId: kagent-backend
-                clientSecret: kagent-backend-secret
+                clientSecret: kagent-enterprise-secret
               rbac:
                 adminsGroup: kagent-admins
                 writersGroup: kagent-writers

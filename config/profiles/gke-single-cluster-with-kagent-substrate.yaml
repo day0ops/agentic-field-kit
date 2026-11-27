@@ -1,0 +1,264 @@
+apiVersion: agentic.demo/v1
+kind: Profile
+metadata:
+  name: gke-single-cluster-with-kagent-substrate
+  description: |
+    Single GKE cluster with kagent Enterprise + Agent Substrate
+    - keycloak OIDC login
+    - enterprise agentgateway
+    - telemetry
+
+spec:
+  infra: gke-single-cluster-substrate
+  environment: google-dev
+  gatewayApiVersion: v1.6.3
+
+  addons:
+    - name: cert-manager
+      description: TLS certificate management (Let's Encrypt via Google Cloud DNS)
+      version: '{{env.addons.cert-manager.version}}'
+      namespace: cert-manager
+      config:
+        letsencrypt:
+          enabled: true
+          provider: clouddns
+          email: '{{env.acme.email}}'
+          gcpServiceAccount: '{{env.dns.gcpServiceAccount}}'
+
+    - name: external-dns
+      description: Automatic DNS record management via Google Cloud DNS
+      version: '{{env.addons.external-dns.version}}'
+      namespace: external-dns
+      config:
+        provider: google
+        domainFilter: '{{env.dns.childZone}}.{{env.dns.parentZone.domain}}'
+        gcpServiceAccount: '{{env.dns.gcpServiceAccount}}'
+
+    - name: agentgateway
+      description: AI Gateway Enterprise (GatewayClass + token exchange for kagent OIDC)
+      phase: post
+      namespace: agentgateway-system
+      version: '{{env.agentgateway.version}}'
+      config:
+        enterprise: true
+        tokenExchange:
+          enabled: true
+          issuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+          jwtIssuer: '{{env.keycloak.scheme}}://{{env.domains.core.keycloak}}/realms/kagent'
+
+    - name: keycloak
+      description: Keycloak OIDC provider
+      phase: post
+      namespace: keycloak
+      keycloakImage: '{{env.keycloak.image}}'
+      config:
+        hostname: '{{env.domains.core.keycloak}}'
+        tls:
+          enabled: true
+          createCertificate: true
+          clusterIssuerName: letsencrypt-dns
+        realms:
+          - realm: kagent
+            # fixture_id claim carries each user's real fixtures.Buyer/Seller ID (e.g.
+            # "buyer-1"), used by agora-mcp-bid-identity's CEL check in agora-demo.yaml.
+            # seller_tier drives the console's "Pro pricing assistant" badge.
+            customAttributes:
+              - fixture_id
+              - seller_tier
+            groups:
+              - kagent-admins
+              - kagent-writers
+              - kagent-readers
+              - buyers
+              - sellers
+              - operators
+              - agora-system
+            clients:
+              - clientId: kagent-enterprise
+                type: confidential
+                clientSecret: kagent-enterprise-secret
+                flows:
+                  - authorization-code
+                groupMembership: true
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+                postLogoutRedirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}'
+              - clientId: kagent-ui
+                type: public
+                flows:
+                  - authorization-code
+                clientAttributes:
+                  pkce.code.challenge.method: S256
+                groupMembership: true
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401, confirmed live.
+                audience: kagent-enterprise-api
+                redirectUris:
+                  - '{{env.kagent.scheme}}://{{env.domains.core.kagentUi}}/*'
+              - clientId: fraud-swarm-driver
+                type: confidential
+                clientSecret: fraud-swarm-driver-secret
+                flows:
+                  - service-account
+                groupMembership: true
+                # Must match enterprise.oidc.allowedAudiences (kagent-enterprise-api is the
+                # chart's own default) -- a client ID here instead of a dedicated audience value
+                # makes the controller reject every token with a bare 401, confirmed live.
+                audience: kagent-enterprise-api
+                serviceAccountGroup: kagent-writers
+              # Agora marketplace demo's buyer/seller login + agentgateway A2A chat. Lives in
+              # this realm, not a separate one: kagent-controller's enterprise OIDC validation
+              # trusts exactly one issuer, so a same-realm token exchange against a different
+              # realm can never produce an accepted token. Multiple client applications in one
+              # realm, differentiated by group, is the supported pattern for this.
+              - clientId: agora-console-ui
+                type: confidential
+                clientSecret: agora-console-ui-secret
+                # authorization-code is the real Keycloak-redirect login oidc-gateway drives.
+                # direct-access is a local/no-gate dev fallback.
+                flows:
+                  - direct-access
+                  - authorization-code
+                redirectUris:
+                  # /account/callback, not /callback -- oidc-gateway's attach-only mode only
+                  # gates agora-console's /account rule, so the callback must land there too.
+                  - '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}/account/callback'
+                postLogoutRedirectUris:
+                  - '{{env.agentgateway.scheme}}://{{env.domains.app.agoraDemo}}'
+                groupMembership: true
+                audience: kagent-enterprise-api
+                # Keycloak 26.2+ requires this attribute explicitly enabled per-client or the
+                # token-exchange-policy's exchange endpoint rejects with "Standard token
+                # exchange is not enabled for the requested client".
+                clientAttributes:
+                  standard.token.exchange.enabled: 'true'
+              # Agora Operator Studio's own system identity for the isolation-check probe
+              # (console/isolation_probe.go) - a client-credentials grant, never a visitor's
+              # forwarded token.
+              - clientId: agora-console-system
+                type: confidential
+                clientSecret: agora-console-system-secret
+                flows:
+                  - service-account
+                groupMembership: true
+                audience: kagent-enterprise-api
+                serviceAccountGroup: agora-system
+            users:
+              - username: kagent-admin
+                email: kagent-admin@example.com
+                firstName: Kagent
+                lastName: Admin
+                memberOf:
+                  - kagent-admins
+              - username: kagent-writer
+                email: kagent-writer@example.com
+                firstName: Kagent
+                lastName: Writer
+                memberOf:
+                  - kagent-writers
+              - username: kagent-reader
+                email: kagent-reader@example.com
+                firstName: Kagent
+                lastName: Reader
+                memberOf:
+                  - kagent-readers
+              # Both demo marketplace accounts carry buying AND selling rights, like a real
+              # marketplace account - not split into separate buyer-only/seller-only identities.
+              # fixture_id and seller_tier are forwarded as token claims and read directly by
+              # console/identity.go - no per-username mapping lives in agora's own code.
+              - username: demo-buyer
+                email: demo-buyer@example.com
+                firstName: Demo
+                lastName: Buyer
+                memberOf:
+                  - buyers
+                  - sellers
+                attributes:
+                  fixture_id: buyer-1
+                  seller_tier: pro
+              # Second identity, for live-auction demos with two real competing bidders (also
+              # dual buy/sell rights, same as demo-buyer).
+              - username: demo-buyer2
+                email: demo-buyer2@example.com
+                firstName: Demo
+                lastName: Buyer2
+                memberOf:
+                  - buyers
+                  - sellers
+                attributes:
+                  fixture_id: buyer-2
+              - username: demo-operator
+                email: demo-operator@example.com
+                firstName: Demo
+                lastName: Operator
+                memberOf:
+                  - operators
+            # password sourced from KAGENT_REALM_DEFAULT_PASSWORD, not this profile -- except
+            # demo-buyer/demo-buyer2/demo-operator, which use AGORA_CUSTOMER_PASSWORD instead
+            # (per-user override, see addons/keycloak/index.js's userPasswordOverrides)
+
+    - name: kagent
+      description: Solo Enterprise for kagent AI agent platform + Agent Substrate
+      phase: post
+      namespace: kagent-system
+      version: '{{env.kagent.version}}'
+      config:
+        enterprise: true
+        clusterName: mgmt-cluster
+        hostname: '{{env.domains.core.kagentUi}}'
+        gatewaySourceRanges: '{{env.security.vpnSourceRanges}}'
+        provider:
+          type: openAI
+        oidc:
+          keycloakHostname: '{{env.domains.core.keycloak}}'
+          keycloakTlsEnabled: true
+          realm: kagent
+          clientSecret: kagent-enterprise-secret
+        otel:
+          endpoint: otel-collector-opentelemetry-collector.kagent-system.svc.cluster.local:4317
+          captureSensitiveContent: true
+        evaluations:
+          enabled: true
+          judge:
+            defaultModelConfig: default-model-config
+            secretNames:
+              - kagent-openai
+        substrate:
+          enabled: true
+          version: '{{env.substrate.version}}'
+          registry: '{{env.substrate.registry}}'
+          kubectlAteVersion: '{{env.substrate.kubectlAteVersion}}'
+          snapshots:
+            identityAnnotation:
+              key: '{{infra.clusters.demo.storage.identityAnnotationKey}}'
+              value: '{{infra.clusters.demo.storage.identityAnnotationValue}}'
+
+    - name: telemetry
+      description: Grafana + Tempo observability for kagent + Agent Substrate (no Loki)
+      phase: post
+      namespace: telemetry
+      chartVersions: '{{env.addons.telemetry}}'
+      config:
+        enableLogs: false
+        enableTraces: true
+        enableMetrics: true
+        installDashboards: true
+        dashboardCategories: ['agw', 'substrate']
+        installOtelCollectors: false
+        gatewayClassName: enterprise-agentgateway
+        sourceRanges: '{{env.security.vpnSourceRanges}}'
+        grafanaHostname: '{{env.domains.core.grafana}}'
+        grafanaTls:
+          enabled: true
+          secretName: grafana-tls
+          issuer: letsencrypt-dns
+
+    - name: otel-collector
+      description: Minimal OTel Collector catching kagent/substrate OTLP into kagent's ClickHouse, fanning traces/metrics to Grafana Tempo/Prometheus
+      phase: post
+      namespace: kagent-system
+      config:
+        clusterName: mgmt-cluster
+        telemetryNamespace: telemetry

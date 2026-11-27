@@ -4,12 +4,12 @@ import { KubernetesHelper, CommandRunner } from '../../src/lib/common.js';
 const EXTERNAL_DNS_VERSION = '1.23.0';
 
 /**
- * Deploys external-dns for automatic DNS record management (AWS Route53 or
- * Google Cloud DNS).
+ * Deploys external-dns for automatic DNS record management (AWS Route53,
+ * Google Cloud DNS, or Cloudflare).
  *
  * Configuration:
  * {
- *   provider: string,          // 'route53' (default) | 'google'
+ *   provider: string,          // 'route53' (default) | 'google' | 'cloudflare'
  *   domainFilter: string,      // Required
  *   txtOwnerId: string,        // Default: 'agentic-demo'
  *   // route53 only:
@@ -18,6 +18,11 @@ const EXTERNAL_DNS_VERSION = '1.23.0';
  *   // google only:
  *   project: string,           // Required (or GCP_PROJECT env var) -- GCP project the zone lives in
  *   gcpServiceAccount: string, // GSA email for the Workload Identity annotation (ADC, no key file)
+ *   // cloudflare only:
+ *   proxied: boolean,          // Default: false -- Cloudflare's proxy can't reach a private
+ *                              // cluster IP, so DNS-only records are the only sensible default.
+ *                              // The API token is read from CLOUDFLARE_API_TOKEN (no ambient
+ *                              // credential mechanism like IRSA/Workload Identity exists).
  * }
  */
 export class ExternalDnsFeature extends AddonFeature {
@@ -34,18 +39,27 @@ export class ExternalDnsFeature extends AddonFeature {
     // Google Cloud DNS
     this.project = config.project || process.env.GCP_PROJECT || null;
     this.gcpServiceAccount = config.gcpServiceAccount || null;
+    // Cloudflare
+    this.cloudflareProxied = config.proxied === true;
+    this.cloudflareApiTokenSecretName = 'external-dns-cloudflare-api-token';
   }
 
   validate() {
-    if (!['route53', 'google'].includes(this.provider)) {
+    if (!['route53', 'google', 'cloudflare'].includes(this.provider)) {
       throw new Error(
-        `DNS provider '${this.provider}' not yet supported. Supported: route53, google.`
+        `DNS provider '${this.provider}' not yet supported. Supported: route53, google, cloudflare.`
       );
     }
 
     if (this.provider === 'google' && !this.project) {
       throw new Error(
         'external-dns: project (or GCP_PROJECT environment variable) is required for provider=google'
+      );
+    }
+
+    if (this.provider === 'cloudflare' && !process.env.CLOUDFLARE_API_TOKEN) {
+      throw new Error(
+        'external-dns: CLOUDFLARE_API_TOKEN environment variable is required for provider=cloudflare'
       );
     }
 
@@ -60,6 +74,10 @@ export class ExternalDnsFeature extends AddonFeature {
     this.log('Installing external-dns...', 'info');
 
     await KubernetesHelper.ensureNamespace(this.namespace, this.spinner, this.kubeContext);
+
+    if (this.provider === 'cloudflare') {
+      await this.createCloudflareApiTokenSecret();
+    }
 
     try {
       await CommandRunner.run(
@@ -107,6 +125,23 @@ export class ExternalDnsFeature extends AddonFeature {
           `serviceAccount.annotations.iam\\.gke\\.io/gcp-service-account=${this.gcpServiceAccount}`
         );
       }
+    } else if (this.provider === 'cloudflare') {
+      helmArgs.push(
+        '--set',
+        'provider.name=cloudflare',
+        '--set',
+        'env[0].name=CF_API_TOKEN',
+        '--set',
+        `env[0].valueFrom.secretKeyRef.name=${this.cloudflareApiTokenSecretName}`,
+        '--set',
+        'env[0].valueFrom.secretKeyRef.key=api-token'
+      );
+      // --cloudflare-proxied is a bare/presence flag (kingpin-style) -- `=false` fails to
+      // parse ("unexpected false"), confirmed live. false is already the binary's default,
+      // so only pass the flag at all when proxying is actually wanted.
+      if (this.cloudflareProxied) {
+        helmArgs.push('--set', 'extraArgs[0]=--cloudflare-proxied');
+      }
     } else {
       // route53. chart v1.14+ uses provider.name (not provider string); aws.region and
       // aws.zoneType moved to env/extraArgs.
@@ -135,6 +170,27 @@ export class ExternalDnsFeature extends AddonFeature {
     await this.waitForDeployment('external-dns', 120);
 
     this.log('external-dns installed successfully', 'success');
+  }
+
+  /**
+   * Reconcile the Secret the chart's CF_API_TOKEN env var reads from. Always re-applied
+   * (not skip-if-exists) since the token can rotate.
+   */
+  async createCloudflareApiTokenSecret() {
+    this.log('Reconciling Cloudflare API token secret...', 'info');
+
+    const ctxFlag = this.kubeContext ? `--context=${this.kubeContext}` : '';
+    const ctxStr = ctxFlag ? `${ctxFlag} ` : '';
+
+    const result = await CommandRunner.exec(
+      `kubectl ${ctxStr}create secret generic ${this.cloudflareApiTokenSecretName} -n ${this.namespace} --from-literal=api-token="${process.env.CLOUDFLARE_API_TOKEN}" --dry-run=client -o yaml | kubectl ${ctxStr}apply -f -`,
+      { ignoreError: true }
+    );
+    if (result.exitCode) {
+      throw new Error(
+        `Failed to reconcile ${this.cloudflareApiTokenSecretName}: ${result.stderr?.trim()}`
+      );
+    }
   }
 
   async cleanup() {

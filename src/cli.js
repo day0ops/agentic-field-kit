@@ -254,6 +254,56 @@ cloud
     }
   });
 
+async function resolveNodeSleepProfile(profileOption) {
+  const infraName = profileOption || (await InfraStateManager.resolveInfraName(null));
+  if (!infraName) {
+    throw new Error('No profile specified and none could be auto-detected. Use -p <name>.');
+  }
+  return infraName;
+}
+
+cloud
+  .command('sleep')
+  .description("Scale an EKS profile's worker nodes to zero on demand")
+  .option('-p, --profile <name>', 'Infra profile name')
+  .option('-c, --cluster <index>', 'Cluster index to target (default: all clusters)')
+  .option('--dry-run', 'Print the AWS CLI command without executing it')
+  .action(async options => {
+    try {
+      const infraName = await resolveNodeSleepProfile(options.profile);
+      const manager = new InfraManager(infraName);
+      await manager.nodeSleep('sleep', {
+        clusterIndex: options.cluster !== undefined ? Number(options.cluster) : undefined,
+        dryRun: options.dryRun,
+      });
+      Logger.success(`Worker nodes asleep for: ${infraName}`);
+    } catch (error) {
+      Logger.error(`Failed to sleep worker nodes: ${error.message}`);
+      process.exit(1);
+    }
+  });
+
+cloud
+  .command('wake')
+  .description("Scale an EKS profile's worker nodes back up to its configured size")
+  .option('-p, --profile <name>', 'Infra profile name')
+  .option('-c, --cluster <index>', 'Cluster index to target (default: all clusters)')
+  .option('--dry-run', 'Print the AWS CLI command without executing it')
+  .action(async options => {
+    try {
+      const infraName = await resolveNodeSleepProfile(options.profile);
+      const manager = new InfraManager(infraName);
+      await manager.nodeSleep('wake', {
+        clusterIndex: options.cluster !== undefined ? Number(options.cluster) : undefined,
+        dryRun: options.dryRun,
+      });
+      Logger.success(`Worker nodes awake for: ${infraName}`);
+    } catch (error) {
+      Logger.error(`Failed to wake worker nodes: ${error.message}`);
+      process.exit(1);
+    }
+  });
+
 cloud
   .command('status')
   .description(

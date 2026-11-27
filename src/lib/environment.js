@@ -96,7 +96,7 @@ export class EnvironmentManager {
     // Validate DNS config if present
     if (env.spec.dns) {
       const dns = env.spec.dns;
-      const validProviders = ['route53', 'azure-dns', 'cloud-dns'];
+      const validProviders = ['route53', 'azure-dns', 'cloud-dns', 'cloudflare'];
       if (!validProviders.includes(dns.provider)) {
         throw new Error(
           `Environment '${name}' has invalid DNS provider '${dns.provider}' (expected: ${validProviders.join(', ')})`

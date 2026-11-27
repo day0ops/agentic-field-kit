@@ -62,9 +62,9 @@ const POSTGRES_VERSION = '18.2-alpine';
  *   },
  *   realms: [],                   // Optional: config-driven realm setup (overrides legacy path).
  *                                  // Realms 'grafana', 'kagent', 'agentregistry',
- *                                  // 'retail-returns-customers', 'carrier-portal' source their
- *                                  // password from the matching env var below (grafana its username too),
- *                                  // ignoring the realm's own defaultPassword/username fields.
+ *                                  // 'retail-returns-customers', 'carrier-portal'
+ *                                  // source their password from the matching env var below (grafana its
+ *                                  // username too), ignoring the realm's own defaultPassword/username fields.
  *                                  // Each realm entry may also carry identityProviders: [{
  *                                  //   alias, displayName, clientId, clientSecretEnvVar,
  *                                  //   authorizationUrl, tokenUrl, jwksUrl, issuer, defaultScope,
@@ -102,6 +102,9 @@ const POSTGRES_VERSION = '18.2-alpine';
  *   AGENTREGISTRY_REALM_DEFAULT_PASSWORD  - agentregistry demo user password
  *   RETAIL_RETURNS_CUSTOMER_PASSWORD      - retail-returns-customers demo-customer password
  *   CARRIER_PORTAL_REALM_DEFAULT_PASSWORD - carrier-portal demo-carrier-customer password
+ *   AGORA_CUSTOMER_PASSWORD               - demo-buyer/demo-buyer2/demo-operator password
+ *                                           (users in the 'kagent' realm, not a realm-level
+ *                                           override -- see userPasswordOverrides)
  */
 export class KeycloakFeature extends AddonFeature {
   constructor(name, config) {
@@ -151,6 +154,7 @@ export class KeycloakFeature extends AddonFeature {
     this.agentregistryRealmPassword = process.env.AGENTREGISTRY_REALM_DEFAULT_PASSWORD || '';
     this.retailReturnsCustomerPassword = process.env.RETAIL_RETURNS_CUSTOMER_PASSWORD || '';
     this.carrierPortalRealmPassword = process.env.CARRIER_PORTAL_REALM_DEFAULT_PASSWORD || '';
+    this.agoraCustomerPassword = process.env.AGORA_CUSTOMER_PASSWORD || '';
     this.hasGrafanaRealm = (config.realms || []).some(r => r.realm === 'grafana');
     this.hasKagentRealm = (config.realms || []).some(r => r.realm === 'kagent');
     this.hasAgentregistryRealm = (config.realms || []).some(r => r.realm === 'agentregistry');
@@ -158,6 +162,17 @@ export class KeycloakFeature extends AddonFeature {
       r => r.realm === 'retail-returns-customers'
     );
     this.hasCarrierPortalRealm = (config.realms || []).some(r => r.realm === 'carrier-portal');
+    // Unlike the realm-scoped flags above, these users share the 'kagent' realm with
+    // kagent-admin/writer/reader -- detected by username, not realm, since their password
+    // must come from its own env var regardless of which realm config declares them in.
+    this.hasAgoraCustomerUsers = (config.realms || []).some(r =>
+      (r.users || []).some(
+        u =>
+          u.username === 'demo-buyer' ||
+          u.username === 'demo-buyer2' ||
+          u.username === 'demo-operator'
+      )
+    );
     const clusterAddons = config.clusterAddons || [];
     this.externalDns = config.externalDns === true || clusterAddons.includes('external-dns');
     this.sourceRanges = config.sourceRanges || null;
@@ -181,6 +196,7 @@ export class KeycloakFeature extends AddonFeature {
       this.hasCarrierPortalRealm &&
         !this.carrierPortalRealmPassword &&
         'CARRIER_PORTAL_REALM_DEFAULT_PASSWORD',
+      this.hasAgoraCustomerUsers && !this.agoraCustomerPassword && 'AGORA_CUSTOMER_PASSWORD',
     ].filter(Boolean);
     if (missing.length > 0) {
       throw new Error(
@@ -195,7 +211,8 @@ export class KeycloakFeature extends AddonFeature {
           '  export KAGENT_REALM_DEFAULT_PASSWORD="<your-password>"\n' +
           '  export AGENTREGISTRY_REALM_DEFAULT_PASSWORD="<your-password>"\n' +
           '  export RETAIL_RETURNS_CUSTOMER_PASSWORD="<your-password>"\n' +
-          '  export CARRIER_PORTAL_REALM_DEFAULT_PASSWORD="<your-password>"'
+          '  export CARRIER_PORTAL_REALM_DEFAULT_PASSWORD="<your-password>"\n' +
+          '  export AGORA_CUSTOMER_PASSWORD="<your-password>"'
       );
     }
     return true;
@@ -418,8 +435,6 @@ export class KeycloakFeature extends AddonFeature {
     };
 
     await execInPg('CREATE DATABASE keycloak;');
-    await execInPg("CREATE USER keycloak WITH PASSWORD 'password';");
-    await execInPg('GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;');
   }
 
   async waitForKeycloak() {
@@ -942,10 +957,20 @@ export class KeycloakFeature extends AddonFeature {
       'retail-returns-customers': this.retailReturnsCustomerPassword,
       'carrier-portal': this.carrierPortalRealmPassword,
     };
+    // Individual users whose password must come from their own env var rather than the
+    // realm's defaultPassword -- for users sharing a realm with others (e.g. agora's
+    // demo-buyer/demo-buyer2/demo-operator living in the 'kagent' realm alongside
+    // kagent-admin) whose credentials shouldn't rotate together with that realm's other,
+    // unrelated users.
+    const userPasswordOverrides = {
+      'demo-buyer': this.agoraCustomerPassword,
+      'demo-buyer2': this.agoraCustomerPassword,
+      'demo-operator': this.agoraCustomerPassword,
+    };
     const defaultPassword = realmPasswordOverrides[realm.realm] || realm.defaultPassword;
     for (const user of realm.users || []) {
       const username = isGrafanaRealm ? this.grafanaAdminUsername : user.username;
-      const password = user.password || defaultPassword;
+      const password = userPasswordOverrides[username] || user.password || defaultPassword;
       if (!password) {
         throw new Error(
           `No password for user '${username}' in realm '${realm.realm}'. Set defaultPassword or per-user password.`
@@ -1987,13 +2012,16 @@ export class KeycloakFeature extends AddonFeature {
           `${baseUrl}/realms/master/protocol/openid-connect/token`,
           '-H',
           'Content-Type: application/x-www-form-urlencoded',
-          '-d',
-          `username=${encodeURIComponent(this.adminUsername)}&password=${encodeURIComponent(this.adminPassword)}&grant_type=password&client_id=admin-cli`,
+          '--data',
+          '@-',
         ];
+        const body = `username=${encodeURIComponent(this.adminUsername)}&password=${encodeURIComponent(this.adminPassword)}&grant_type=password&client_id=admin-cli`;
         this.log(`getAdminToken attempt ${i + 1}`, 'debug');
 
-        const result = await CommandRunner.run('curl', curlArgs, { ignoreError: true });
-        this.log(`getAdminToken stdout=${result.stdout?.substring(0, 200)}`, 'debug');
+        const result = await CommandRunner.run('curl', curlArgs, {
+          ignoreError: true,
+          input: body,
+        });
 
         if (result.stdout) {
           const parsed = JSON.parse(result.stdout);

@@ -7,7 +7,7 @@ metadata:
 spec:
   # AWS configuration
   aws:
-    region: ap-southeast-1
+    region: ap-southeast-2
 
   acme:
     email: kasun.talwatta@solo.io
@@ -18,8 +18,8 @@ spec:
     parentZone:
       domain: kasunt.apac.fe.solo.io
       hostedZoneId: Z08818701HDZ6PBD6LPXU
-    childZone: mesh-demo
-    txtOwnerId: agentic-demo
+    childZone: agentic
+    txtOwnerId: agentic
 
   tls:
     issuer: letsencrypt-dns
@@ -34,6 +34,14 @@ spec:
     vpnSourceRanges:
       - 165.99.148.61/32
       - 64.226.138.86/32
+      - 149.28.68.29/32
+      - 107.191.62.86/32
+      - 209.35.249.70/32
+      - 216.238.92.73/32
+      - 209.35.248.11/32
+      - 139.84.211.68/32
+      - 124.198.249.3/32
+      - 155.138.145.87/32
 
   keycloak:
     image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.4
@@ -46,14 +54,16 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.3
+    version: v2026.11.1
 
   kagent:
     scheme: https
-    version: 0.5.6
+    version: 2026.11.2
 
   substrate:
-    version: 1.0.0-alpha5
+    version: 1.1.0-alpha1-7354c972
+    registry: oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm
+    kubectlAteVersion: v1.1.0-alpha1
 
   soloUi:
     version: 0.5.6
@@ -84,6 +94,11 @@ spec:
       repoMcpClientId: e32b61f8-6801-4d3d-993e-882252ca06cd
 
   images:
+    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...). Must track
+    # kagent.version's release line -- a stale digest fails ActorTemplate's /config
+    # materialization. As of 2026.11.2 this is Solo's own build (resolved from the release's
+    # release-manifest.json asset, not GHCR's upstream OSS tags).
+    kagentHarness: us-docker.pkg.dev/solo-public/kagent-enterprise/golang-adk@sha256:383d602b3640e49229cdb2ebf6f7bb3e8bcd16429ac9a88e03c57c0d8e6954ae
     finflow:
       marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.0
       newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.0
@@ -110,6 +125,17 @@ spec:
       runbookMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-runbook-mcp:v0.1.0
       repoMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-repo-mcp:v0.1.0
       chatApp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/sre-incident-response-chat-app:v0.1.0
+    agoraDemo:
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.2
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.2
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.2
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.2
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.2
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.2
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.2
+      brandRegistry: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-brand-registry:v0.1.2
+      # Digest-pinned OCI Skill artifact - required by AgentTemplate.spec.skills[].source.oci (not a version tag).
+      brandCheckSkill: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-skills/brand-check@sha256:9c14d9cab7c299ab414ef3617d5cb315ad2a33b534b99c41d25fd0238c1d53a4
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
@@ -132,15 +158,16 @@ spec:
   # app: per-usecase dedicated hostnames (own Gateway), one entry per usecase that has one.
   domains:
     core:
-      keycloak: keycloak.mesh-demo.kasunt.apac.fe.solo.io
-      grafana: grafana.mesh-demo.kasunt.apac.fe.solo.io
-      agentregistryUi: agentregistry-ui.mesh-demo.kasunt.apac.fe.solo.io
-      agentregistryTelemetry: agentregistry-telemetry.mesh-demo.kasunt.apac.fe.solo.io
-      soloUi: solo-ui.mesh-demo.kasunt.apac.fe.solo.io
-      kagentUi: kagent-ui.mesh-demo.kasunt.apac.fe.solo.io
-      agentgatewayUi: agw-ui.mesh-demo.kasunt.apac.fe.solo.io
-      meshUi: mesh-ui.mesh-demo.kasunt.apac.fe.solo.io
+      keycloak: keycloak.agentic.kasunt.apac.fe.solo.io
+      grafana: grafana.agentic.kasunt.apac.fe.solo.io
+      agentregistryUi: agentregistry-ui.agentic.kasunt.apac.fe.solo.io
+      agentregistryTelemetry: agentregistry-telemetry.agentic.kasunt.apac.fe.solo.io
+      soloUi: solo-ui.agentic.kasunt.apac.fe.solo.io
+      kagentUi: kagent-ui.agentic.kasunt.apac.fe.solo.io
+      agentgatewayUi: agw-ui.agentic.kasunt.apac.fe.solo.io
+      meshUi: mesh-ui.agentic.kasunt.apac.fe.solo.io
     app:
-      main: app.mesh-demo.kasunt.apac.fe.solo.io
-      retailReturns: retail-returns.mesh-demo.kasunt.apac.fe.solo.io
-      sreIRS: sre-irs.mesh-demo.kasunt.apac.fe.solo.io
+      main: app.agentic.kasunt.apac.fe.solo.io
+      retailReturns: retail-returns.agentic.kasunt.apac.fe.solo.io
+      sreIRS: sre-irs.agentic.kasunt.apac.fe.solo.io
+      agoraDemo: agora.agentic.kasunt.apac.fe.solo.io

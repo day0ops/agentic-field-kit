@@ -12,8 +12,13 @@ spec:
   settings:
     nodes:
       desired: 2
+      min: 0
       type: t3.medium
       private: true
+    enable_node_sleep_schedule: true
+    node_sleep_cron: '30 18 * * MON-FRI'
+    node_wake_cron: '0 8 * * MON-FRI'
+    node_sleep_timezone: 'Pacific/Auckland'
 
   clusters:
     - name: demo

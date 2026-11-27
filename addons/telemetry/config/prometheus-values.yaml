@@ -14,13 +14,15 @@ nodeExporter:
 kubeStateMetrics:
   enabled: true
 
-# Disable built-in Kubernetes component scrapers (not relevant for Istio mesh observability)
+# Disable built-in Kubernetes component scrapers (not relevant for Istio mesh observability),
+# except kubelet -- its cAdvisor endpoint is the only source of real container CPU/memory
+# usage, needed for Substrate component resource panels.
 kubernetesServiceMonitors:
-  enabled: false
+  enabled: true
 kubeApiServer:
   enabled: false
 kubelet:
-  enabled: false
+  enabled: true
 kubeControllerManager:
   enabled: false
 coreDns:

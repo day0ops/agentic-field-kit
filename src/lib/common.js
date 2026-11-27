@@ -419,6 +419,18 @@ const ERROR_HINTS = [
   },
 ];
 
+const SECRET_ARG_KEY_PATTERN = /password|secret|token|license|apikey|api-key|credential/i;
+
+/** Masks the value half of `key=value` style args whose key looks secret-bearing. */
+function redactSecretArgs(args) {
+  return args.map(arg => {
+    const eqIdx = arg.indexOf('=');
+    if (eqIdx === -1) return arg;
+    const key = arg.slice(0, eqIdx);
+    return SECRET_ARG_KEY_PATTERN.test(key) ? `${key}=***` : arg;
+  });
+}
+
 function enrichError(error) {
   const text = [error.message, error.stderr, error.stdout].filter(Boolean).join('\n');
   for (const { pattern, hint } of ERROR_HINTS) {
@@ -436,7 +448,7 @@ export class CommandRunner {
     const { verbose = false, cwd = process.cwd() } = options;
 
     if (verbose) {
-      Logger.debug(`Running: ${command} ${args.join(' ')}`);
+      Logger.debug(`Running: ${command} ${redactSecretArgs(args).join(' ')}`);
     }
 
     try {
@@ -446,6 +458,8 @@ export class CommandRunner {
       });
       return result;
     } catch (error) {
+      Logger.debug(`Command failed: ${command} ${redactSecretArgs(args).join(' ')}`);
+      error.message = `${command} failed (exit code ${error.exitCode ?? 'unknown'})`;
       if (!options.ignoreError) {
         throw enrichError(error);
       }
@@ -854,14 +868,19 @@ export function waitFor(ms) {
  * Additionally gates the listener to a fixed CIDR allowlist (e.g. a VPN egress range)
  * when sourceRanges is non-empty.
  *
- * Two non-obvious AWS LBC gotchas, both confirmed live (source-ranges silently had no
- * effect, NLB stayed open to 0.0.0.0/0, until both were fixed):
+ * Three non-obvious AWS LBC gotchas, all confirmed live (source-ranges silently had no
+ * effect, NLB stayed open to 0.0.0.0/0, until the first two were fixed; the NLB serving
+ * requests only from targets in its own AZ, dropping/timing out traffic whenever the
+ * single backing pod landed in a different AZ, until the third was added):
  *  - The CIDR-allowlist key is `load-balancer-source-ranges` with NO `aws-` prefix —
  *    the one annotation in this whole system inherited from the generic in-tree
  *    cloud-provider convention rather than AWS LBC's own `aws-load-balancer-*` naming.
  *  - With nlb-target-type=ip, AWS disables client-IP preservation by default, and
  *    source-ranges is documented to be ignored entirely when that's disabled — so it
  *    must be turned back on via target-group-attributes.
+ *  - AWS NLBs default to AZ-local routing (cross-zone load balancing off) — this must be
+ *    turned on explicitly or a single-replica backend only ever receives traffic that
+ *    happens to enter through its own AZ.
  *
  * sourceRanges may contain a mix of plain CIDR strings and nested arrays — profile YAML
  * combines a whole-list template token (e.g. {{env.security.vpnSourceRanges}}, which
@@ -879,6 +898,7 @@ export function nlbSourceRangeAnnotations(sourceRanges) {
     'service.beta.kubernetes.io/aws-load-balancer-scheme': 'internet-facing',
     'service.beta.kubernetes.io/aws-load-balancer-target-group-attributes':
       'preserve_client_ip.enabled=true',
+    'service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled': 'true',
     ...(ranges.length > 0
       ? { 'service.beta.kubernetes.io/load-balancer-source-ranges': ranges.join(',') }
       : {}),

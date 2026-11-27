@@ -263,6 +263,42 @@ export class InfraManager {
     }
   }
 
+  /**
+   * On-demand worker node sleep/wake for an 'eks' profile, outside the
+   * Terraform-managed recurring schedule. See TerraformCloudRunner#nodeSleep.
+   */
+  async nodeSleep(action, options = {}) {
+    const infraProfile = await this.loadInfraProfile();
+
+    const provider = InfraSchema.getProvider(infraProfile);
+    const clusters = InfraSchema.getAllClusters(infraProfile);
+    const settings = InfraSchema.getSettings(infraProfile);
+    const environment = await this.loadEnvironment(infraProfile);
+    const region = InfraSchema.getRegion(infraProfile, environment);
+    const infraName = InfraSchema.getName(infraProfile);
+
+    const syntheticClusters = clusters.map(cluster => ({
+      name: cluster.name,
+      context: 'auto',
+      provisioner: {
+        type: provider,
+        cloud: cluster.cloud || provider,
+        region: cluster.region || region,
+        ...settings,
+        ...(cluster.settings || {}),
+        ...(infraName ? { cluster_name: infraName } : {}),
+      },
+    }));
+
+    const RunnerClass = getProvisionerRunner(provider);
+    const runner = new RunnerClass(this.infraName, syntheticClusters, {
+      outputDir: this.outputDir,
+      kubeconfigDir: this.kubeconfigDir,
+    });
+
+    await runner.nodeSleep(action, options);
+  }
+
   async status() {
     const infraProfile = await this.loadInfraProfile();
     const state = await InfraStateManager.load(this.infraName);

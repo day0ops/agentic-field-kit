@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { KeycloakFeature } from '../../addons/keycloak/index.js';
+import { KubernetesHelper, CommandRunner, Logger } from '../../src/lib/common.js';
 
 const ENV_KEYS = [
   'KEYCLOAK_ADMIN_USERNAME',
@@ -96,4 +97,53 @@ test('keycloak runbook cleanup deletes the namespace only, not the full manifest
   );
   expect(md).not.toContain('apiVersion:');
   expect(md).not.toContain('<<EOF');
+});
+
+test('initPostgresDb only creates the keycloak database, no extra login role', async () => {
+  const f = new KeycloakFeature('keycloak', realmConfig('something-else'));
+  f.log = () => {};
+  const calls = [];
+  const originalKubectl = KubernetesHelper.kubectl;
+  KubernetesHelper.kubectl = async args => {
+    calls.push(args.join(' '));
+    return { stdout: '' };
+  };
+  try {
+    await f.initPostgresDb();
+  } finally {
+    KubernetesHelper.kubectl = originalKubectl;
+  }
+  const sqlCalls = calls.filter(c => c.includes('psql'));
+  expect(sqlCalls.some(c => c.includes('CREATE DATABASE keycloak'))).toBe(true);
+  expect(sqlCalls.some(c => c.includes('CREATE USER keycloak'))).toBe(false);
+  expect(sqlCalls.some(c => c.includes('GRANT ALL PRIVILEGES ON DATABASE keycloak'))).toBe(false);
+}, 10000);
+
+test('getAdminToken does not log the admin token response and sends credentials via stdin, not argv', async () => {
+  const f = new KeycloakFeature('keycloak', realmConfig('something-else'));
+  const debugLogs = [];
+  const originalDebug = Logger.debug;
+  Logger.debug = message => debugLogs.push(message);
+  const originalRun = CommandRunner.run;
+  const runCalls = [];
+  CommandRunner.run = async (command, args, options) => {
+    runCalls.push({ command, args, options });
+    return { stdout: JSON.stringify({ access_token: 'super-secret-admin-token' }) };
+  };
+  try {
+    const token = await f.getAdminToken('https://keycloak.example.com');
+    expect(token).toBe('super-secret-admin-token');
+  } finally {
+    Logger.debug = originalDebug;
+    CommandRunner.run = originalRun;
+  }
+
+  expect(debugLogs.some(m => m.includes('super-secret-admin-token'))).toBe(false);
+
+  const curlCall = runCalls.find(c => c.command === 'curl');
+  expect(curlCall.args.join(' ')).not.toContain(f.adminPassword);
+  expect(curlCall.args.join(' ')).not.toContain(`username=${f.adminUsername}`);
+  expect(curlCall.args).toContain('--data');
+  expect(curlCall.args).toContain('@-');
+  expect(curlCall.options.input).toContain(`password=${encodeURIComponent(f.adminPassword)}`);
 });

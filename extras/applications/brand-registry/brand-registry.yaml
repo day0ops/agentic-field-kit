@@ -1,0 +1,66 @@
+# Mock external brand/counterfeit registry for Agora's egress-policy demo. A
+# plain Deployment outside kagent/Substrate, standing in for a real
+# third-party verification API - trust-safety/shopping-assistant reach it
+# directly via a bash-executed Skill, gated by a manual kagent EgressPolicy
+# (not auto-granted, unlike a registered RemoteMCPServer tool).
+#
+# Deliberately its own namespace with its own Service DNS name, distinct from
+# agora's own hostname/origin - every Agora MCP server is registered under
+# agora's hostname, which already sits in every agent's auto-granted base
+# egress, so this origin must not collide with it.
+#
+# Image ref comes from env.images.agoraDemo.brandRegistry, same release train
+# as console/catalog-api/etc.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: brand-registry
+  labels:
+    app.kubernetes.io/managed-by: agentic-demo
+    app.kubernetes.io/part-of: brand-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brand-registry
+  namespace: brand-registry
+  labels:
+    app: brand-registry
+spec:
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+  selector:
+    app: brand-registry
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brand-registry
+  namespace: brand-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: brand-registry
+  template:
+    metadata:
+      labels:
+        app: brand-registry
+    spec:
+      containers:
+        - name: brand-registry
+          image: '{{env.images.agoraDemo.brandRegistry}}'
+          # Always, not the default - a node can otherwise serve a stale cached
+          # digest for the same tag after a dev image gets rebuilt/repushed
+          # (confirmed live, this project's own east-node-stale-image-cache gotcha).
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8090
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: brand-registry-api-key
+                  key: key

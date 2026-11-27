@@ -55,6 +55,14 @@ spec:
     vpnSourceRanges:
       - 165.99.148.61/32
       - 64.226.138.86/32
+      - 149.28.68.29/32
+      - 107.191.62.86/32
+      - 209.35.249.70/32
+      - 216.238.92.73/32
+      - 209.35.248.11/32
+      - 139.84.211.68/32
+      - 124.198.249.3/32
+      - 155.138.145.87/32
 
   keycloak:
     image: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/keycloak:26.7.4
@@ -67,35 +75,27 @@ spec:
 
   agentgateway:
     scheme: https
-    version: v2026.9.3
+    version: v2026.11.1
 
   kagent:
     scheme: https
-    # 1.0.0-alpha6 pairs with substrate 0.3.0-alpha3 (see addons/kagent/index.js): that fixes
-    # CreateActorEgressPolicy/session creation, but real A2A message delivery then fails on every
-    # session with atenet-router reporting "Connect: tunnel failed" (root cause not isolated).
-    # Pairing alpha6 with beta6 instead is a hard protobuf field-number collision, not a
-    # workaround: EgressRule field 2 is Cidrs in beta6's schema and Https in 0.3.0-alpha3's, so
-    # CreateSession fails outright, reproduced even on Solo's own minimal "Your First Agent"
-    # tutorial -- see addons/kagent/index.js for the full writeup. alpha5 is an older architecture
-    # generation (`kagent.dev` apiGroup, no `Agent` CRD, Harness.allowedAgentTemplates selector
-    # instead of an Agent pairing) that substrate-agent now targets directly -- see that
-    # feature's class doc comment.
-    version: 1.0.0-alpha5
+    version: 2026.11.2
 
   # Agent Substrate chart version
   substrate:
-    # alpha5's native, correctly-paired substrate version (see addons/kagent/index.js and the
-    # kagent.version comment above for the alpha6/beta6 vs alpha6/0.3.0-alpha3 incompatibilities
-    # that led here).
-    version: 0.2.0-beta6-5462374
+    version: 1.1.0-alpha1-7354c972
+    registry: oci://us-docker.pkg.dev/solo-public/enterprise-substrate-helm
+    kubectlAteVersion: v1.1.0-alpha1
 
   soloUi:
     version: 0.5.7
 
   images:
-    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...).
-    kagentHarness: ghcr.io/kagent-dev/kagent/golang-adk@sha256:0ef67974d39518b18de074bd9762fb4aea9764fc8836eeb45d7868b358eecb30
+    # Harness.spec.workload.image is CRD-enforced digest-pinned (name@sha256:...). Must track
+    # kagent.version's release line -- a stale digest fails ActorTemplate's /config
+    # materialization. As of 2026.11.2 this is Solo's own build (resolved from the release's
+    # release-manifest.json asset, not GHCR's upstream OSS tags).
+    kagentHarness: us-docker.pkg.dev/solo-public/kagent-enterprise/golang-adk@sha256:383d602b3640e49229cdb2ebf6f7bb3e8bcd16429ac9a88e03c57c0d8e6954ae
     finflow:
       marketDataAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-market-data-agent:0.1.2
       newsSentimentAgent: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/finflow-news-sentiment-agent:0.1.2
@@ -128,6 +128,17 @@ spec:
       deviceRiskMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/device-risk-mcp:v0.1.0
       typologyMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/typology-mcp:v0.1.0
       opsConsole: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/fraud-ops-console:v0.1.0
+    agoraDemo:
+      catalogApi: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-api:v0.1.2
+      console: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-console:v0.1.2
+      bidsMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-bids-mcp:v0.1.2
+      ordersMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-orders-mcp:v0.1.2
+      pricingMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-pricing-mcp:v0.1.2
+      trustMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-trust-mcp:v0.1.2
+      catalogMcp: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-catalog-mcp:v0.1.2
+      brandRegistry: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-brand-registry:v0.1.2
+      # Digest-pinned OCI Skill artifact - required by AgentTemplate.spec.skills[].source.oci (not a version tag).
+      brandCheckSkill: australia-southeast1-docker.pkg.dev/field-engineering-apac/kasunt/agora-skills/brand-check@sha256:9c14d9cab7c299ab414ef3617d5cb315ad2a33b534b99c41d25fd0238c1d53a4
 
   # Internal cluster/mesh FQDNs (not publicly routable)
   internal:
@@ -159,3 +170,4 @@ spec:
     app:
       main: app.agentic-demo-gke.kasunt.apac.fe.solo.io
       retailReturns: retail-returns.agentic-demo-gke.kasunt.apac.fe.solo.io
+      agoraDemo: agora.agentic-demo-gke.kasunt.apac.fe.solo.io

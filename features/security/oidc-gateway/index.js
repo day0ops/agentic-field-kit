@@ -41,15 +41,33 @@ import { nlbSourceRangeAnnotations } from '../../../src/lib/common.js';
  *   hostname: string,         // Required — public hostname for the new Gateway's listener
  *   tlsIssuer: string,        // Default: 'letsencrypt-dns' (repo-wide ClusterIssuer)
  *   gatewayName: string,      // Required
- *   routeName: string,        // Required
- *   sourceRanges: string[],   // Optional — CIDR allowlist for the public NLB (e.g.
- *                             // env.security.vpnSourceRanges), same nlbSourceRangeAnnotations
- *                             // helper the shared hub-agentgateway-proxy Gateway uses. Also
- *                             // what actually pins the NLB scheme to internet-facing --
- *                             // without this feature wiring an EnterpriseAgentgatewayParameters
- *                             // object at all, AWS LBC's own default (internal) silently makes
- *                             // this Gateway's Service unreachable from outside the VPC
- *                             // regardless of source IP; confirmed live.
+ *   routeName: string,        // Required. When createGateway is false, this is the name of
+ *                             // an EXISTING HTTPRoute (built by another feature) to attach
+ *                             // the OIDC gate to, instead of a route this feature creates.
+ *   createGateway: boolean,   // Default: true. When false, skips building this feature's own
+ *                             // Certificate/GatewayParameters/Gateway/HTTPRoute entirely --
+ *                             // only the Secret/AuthConfig/EnterpriseAgentgatewayPolicy are
+ *                             // applied, targeting routeName's existing HTTPRoute (optionally
+ *                             // one specific rule of it, via sectionName). hostname/
+ *                             // gatewayName/backend/sourceRanges/ambientEnabled become
+ *                             // irrelevant in this mode. oidc.appUrl must be set explicitly
+ *                             // (there's no Gateway hostname to derive it from).
+ *   sectionName: string,      // Optional -- when set, scopes buildExtAuthPolicy()'s targetRef
+ *                             // to one named rule of routeName's HTTPRoute (Gateway API
+ *                             // GEP-713, confirmed present in this cluster's HTTPRoute and
+ *                             // EnterpriseAgentgatewayPolicy CRDs), rather than the whole
+ *                             // route. Lets one route serve both gated and ungated traffic.
+ *   sourceRanges: string[],   // Optional — CIDR allowlist for the public LB (e.g.
+ *                             // env.security.vpnSourceRanges). Applied both as the AWS NLB
+ *                             // nlbSourceRangeAnnotations and as native
+ *                             // spec.service.spec.loadBalancerSourceRanges on
+ *                             // EnterpriseAgentgatewayParameters, since the annotation is a
+ *                             // no-op on GKE/AKS. Also what pins the NLB scheme to
+ *                             // internet-facing on AWS -- without this feature wiring an
+ *                             // EnterpriseAgentgatewayParameters object at all, AWS LBC's own
+ *                             // default (internal) silently makes this Gateway's Service
+ *                             // unreachable from outside the VPC regardless of source IP;
+ *                             // confirmed live.
  *   backend: {                // Required — existing Service this route sends traffic to
  *     name: string,           // Required
  *     port: number,           // Required
@@ -103,8 +121,16 @@ export class OidcGatewayFeature extends Feature {
     this.tlsSecretName = config.gatewayName ? `${config.gatewayName}-tls` : undefined;
     this.gatewayName = config.gatewayName;
     this.routeName = config.routeName;
+    this.createGateway = config.createGateway !== false;
+    this.sectionName = config.sectionName || null;
     this.paramsName = config.gatewayName ? `${config.gatewayName}-params` : undefined;
-    this.sourceRanges = config.sourceRanges || [];
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.sourceRanges = Array.isArray(config.sourceRanges)
+      ? config.sourceRanges.flat().filter(Boolean)
+      : config.sourceRanges || [];
     this.backend = config.backend || {};
     this.authConfigName = config.authConfigName || `${config.routeName}-oidc`;
     this.policyName = config.policyName || `${config.routeName}-oidc-gate`;
@@ -129,20 +155,30 @@ export class OidcGatewayFeature extends Feature {
 
   validate() {
     if (!this.namespace) throw new Error('oidc-gateway: namespace is required');
-    if (!this.hostname) throw new Error('oidc-gateway: hostname is required');
-    if (!this.gatewayName) throw new Error('oidc-gateway: gatewayName is required');
     if (!this.routeName) throw new Error('oidc-gateway: routeName is required');
-    if (!this.backend.name) throw new Error('oidc-gateway: backend.name is required');
-    if (!this.backend.port) throw new Error('oidc-gateway: backend.port is required');
-    // config.oidc is optional -- omit it entirely for a plain public Gateway (correct
-    // NLB annotations, TLS, no login gating) when the backend handles its own auth,
-    // e.g. an app doing its own OIDC Authorization Code flow directly. Once any oidc.*
-    // field is set, all three become required together (a half-configured ExtAuth gate
-    // is worse than none).
+    if (this.createGateway) {
+      if (!this.hostname) throw new Error('oidc-gateway: hostname is required');
+      if (!this.gatewayName) throw new Error('oidc-gateway: gatewayName is required');
+      if (!this.backend.name) throw new Error('oidc-gateway: backend.name is required');
+      if (!this.backend.port) throw new Error('oidc-gateway: backend.port is required');
+    } else if (!this.clientId) {
+      throw new Error(
+        'oidc-gateway: oidc.* is required when createGateway is false (attach-only mode has nothing to attach without it)'
+      );
+    }
+    // config.oidc is optional when createGateway is true -- omit it entirely for a plain
+    // public Gateway (correct NLB annotations, TLS, no login gating) when the backend
+    // handles its own auth. Once any oidc.* field is set, all three become required
+    // together (a half-configured ExtAuth gate is worse than none).
     if (this.clientId || this.clientSecret || this.issuerUrl) {
       if (!this.clientId) throw new Error('oidc-gateway: oidc.clientId is required');
       if (!this.clientSecret) throw new Error('oidc-gateway: oidc.clientSecret is required');
       if (!this.issuerUrl) throw new Error('oidc-gateway: oidc.issuerUrl is required');
+      if (!this.createGateway && !this.appUrl) {
+        throw new Error(
+          'oidc-gateway: oidc.appUrl is required when createGateway is false (no Gateway hostname to derive it from)'
+        );
+      }
     }
     return true;
   }
@@ -237,6 +273,12 @@ export class OidcGatewayFeature extends Feature {
       spec: {
         service: {
           metadata: { annotations: nlbSourceRangeAnnotations(this.sourceRanges) },
+          // Native spec.loadBalancerSourceRanges, alongside the AWS-only annotation above --
+          // the annotation is a no-op on GKE/AKS, so this is what actually gates the LB
+          // cross-cloud.
+          ...(this.sourceRanges.length > 0 && {
+            spec: { loadBalancerSourceRanges: this.sourceRanges },
+          }),
         },
       },
     };
@@ -352,7 +394,12 @@ export class OidcGatewayFeature extends Feature {
       },
       spec: {
         targetRefs: [
-          { group: 'gateway.networking.k8s.io', kind: 'HTTPRoute', name: this.routeName },
+          {
+            group: 'gateway.networking.k8s.io',
+            kind: 'HTTPRoute',
+            name: this.routeName,
+            ...(this.sectionName && { sectionName: this.sectionName }),
+          },
         ],
         traffic: {
           // backendRef intentionally omitted -- defaults to the provisioned
@@ -368,19 +415,29 @@ export class OidcGatewayFeature extends Feature {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
-      await this.applyResource(this.buildCertificate(), context);
-      await this.applyResource(this.buildGatewayParameters(), context);
-      await this.applyResource(this.buildGateway(), context);
-      await this.applyResource(this.buildHttpRoute(), context);
+      if (this.createGateway) {
+        await this.applyResource(this.buildCertificate(), context);
+        await this.applyResource(this.buildGatewayParameters(), context);
+        await this.applyResource(this.buildGateway(), context);
+      }
+      // Gate applied before the HTTPRoute so the backend is never reachable through a
+      // programmed route without its auth already in place -- an EnterpriseAgentgatewayPolicy
+      // can validly target an HTTPRoute that doesn't exist yet.
       if (this.clientId) {
         await this.applyResource(this.buildClientSecret(), context);
         await this.applyResource(this.buildAuthConfig(), context);
         await this.applyResource(this.buildExtAuthPolicy(), context);
       }
+      if (this.createGateway) {
+        await this.applyResource(this.buildHttpRoute(), context);
+      }
     }
     if (this.clientId) {
+      const target = this.createGateway
+        ? `https://${this.hostname} -> ${this.backend.name}:${this.backend.port}`
+        : `HTTPRoute ${this.routeName}${this.sectionName ? `#${this.sectionName}` : ''}`;
       this.log(
-        `OIDC gate '${this.policyName}' applied: https://${this.hostname} -> ${this.backend.name}:${this.backend.port}, login required via ${this.issuerUrl}`,
+        `OIDC gate '${this.policyName}' applied: ${target}, login required via ${this.issuerUrl}`,
         'success'
       );
     } else {
@@ -395,6 +452,12 @@ export class OidcGatewayFeature extends Feature {
     const contextsToDeploy =
       this.clusterContexts?.length > 0 ? this.clusterContexts.map(c => c.context) : [null];
     for (const context of contextsToDeploy) {
+      // HTTPRoute/Gateway removed before the auth gate so the route never serves traffic
+      // ungated while cleanup is in progress.
+      if (this.createGateway) {
+        await this.deleteResource('httproute', this.routeName, this.namespace, context);
+        await this.deleteResource('gateway', this.gatewayName, this.namespace, context);
+      }
       if (this.clientId) {
         await this.deleteResource(
           'enterpriseagentgatewaypolicy',
@@ -405,16 +468,21 @@ export class OidcGatewayFeature extends Feature {
         await this.deleteResource('authconfig', this.authConfigName, this.namespace, context);
         await this.deleteResource('secret', this.clientSecretName, this.namespace, context);
       }
-      await this.deleteResource('httproute', this.routeName, this.namespace, context);
-      await this.deleteResource('gateway', this.gatewayName, this.namespace, context);
-      await this.deleteResource(
-        'enterpriseagentgatewayparameters',
-        this.paramsName,
-        this.namespace,
-        context
-      );
-      await this.deleteResource('certificate', this.tlsSecretName, this.namespace, context);
+      if (this.createGateway) {
+        await this.deleteResource(
+          'enterpriseagentgatewayparameters',
+          this.paramsName,
+          this.namespace,
+          context
+        );
+        await this.deleteResource('certificate', this.tlsSecretName, this.namespace, context);
+      }
     }
-    this.log(`Gateway '${this.gatewayName}' removed`, 'success');
+    this.log(
+      this.createGateway
+        ? `Gateway '${this.gatewayName}' removed`
+        : `OIDC gate on HTTPRoute '${this.routeName}' removed`,
+      'success'
+    );
   }
 }

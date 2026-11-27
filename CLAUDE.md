@@ -53,16 +53,26 @@ export KAGENT_REALM_DEFAULT_PASSWORD=<password> # Required only when a 'kagent' 
 export AGENTREGISTRY_REALM_DEFAULT_PASSWORD=<password> # Required only when an 'agentregistry' realm is configured
 export RETAIL_RETURNS_CUSTOMER_PASSWORD=<password> # Required only when a 'retail-returns-customers' realm is configured
 export CARRIER_PORTAL_REALM_DEFAULT_PASSWORD=<password> # Required only when a 'carrier-portal' realm is configured
+export AGORA_CUSTOMER_PASSWORD=<password>    # Required only when demo-buyer/demo-seller/demo-operator users are configured (per-user override, not a separate realm)
+export BRAND_REGISTRY_API_KEY=<key>          # Required only for agora-demo-eks (brand-registry mock service + its EgressPolicy authentication.secretKeyRef)
 
 # telemetry addon, full mode (no defaults - deploy fails cleanly if unset)
 export GRAFANA_ADMIN_USERNAME=<user>         # Grafana admin login username
 export GRAFANA_ADMIN_PASSWORD=<password>     # Grafana admin login password
+
+# cert-manager and external-dns addons, provider=cloudflare (no defaults - deploy fails cleanly if unset)
+export CLOUDFLARE_API_TOKEN=<token>          # Cloudflare API token with DNS edit permission on the target zone
 ```
 
 ## Style
 
 - Don't soft-wrap `description` fields in usecase/feature/profile YAML — they don't render well on stdout.
 - Don't add comments to usecase/profile YAML narrating what worked or didn't work (e.g. "confirmed live", "UNVERIFIED", debugging history). Keep comments concise and lean - state the constraint or non-obvious behavior, not the investigation that led to it.
+
+## Related repos
+
+- Private, under `~/Projects/work/private/`: for Substrate, use `enterprise-kagent` (1.x/`v2026.11.x` line, has the `SubstrateAPI` service). Ignore `kagent-enterprise` (pre-1.0, no Substrate support) despite the similar name.
+- Open source: `~/Projects/opensource/cloudnative/kagent` and `~/Projects/opensource/cloudnative/substrate`
 
 ## Architecture
 

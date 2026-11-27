@@ -397,7 +397,13 @@ export class AgentregistryFeature extends AddonFeature {
     this.tlsEnabled = !!(tls.secretName || tls.issuer || tls.enabled);
     this.tlsSecretName = tls.secretName || 'agentregistry-tls';
     this.tlsIssuer = tls.issuer || 'letsencrypt-dns';
-    this.sourceRanges = config.sourceRanges || null;
+    // Profile YAML may mix a whole-list template token (resolves to an array) with
+    // individual CIDR tokens in the same list -- .flat() collapses that one level so this
+    // is always a flat string[], never a jagged array (the Gateway controller rejects a
+    // nested array for the native k8s loadBalancerSourceRanges field; confirmed live).
+    this.sourceRanges = Array.isArray(config.sourceRanges)
+      ? config.sourceRanges.flat().filter(Boolean)
+      : config.sourceRanges || null;
 
     const oidc = config.oidc || {};
     if (oidc.issuer) {
@@ -758,27 +764,51 @@ export class AgentregistryFeature extends AddonFeature {
       this.kubeContext
     );
 
+    const otelGatewaySpec = {
+      gatewayClassName: 'enterprise-agentgateway',
+      listeners: [
+        {
+          name: 'https',
+          port: 443,
+          protocol: 'HTTPS',
+          hostname: cfg.hostname,
+          tls: {
+            mode: 'Terminate',
+            certificateRefs: [{ name: cfg.tlsSecretName, kind: 'Secret' }],
+          },
+          allowedRoutes: { namespaces: { from: 'Same' } },
+        },
+      ],
+    };
+
+    if (this.sourceRanges) {
+      // Native spec.loadBalancerSourceRanges via EnterpriseAgentgatewayParameters, same
+      // pattern as kagent's UI Gateway -- this GatewayClass is always enterprise-agentgateway,
+      // so nlbSourceRangeAnnotations (Istio-only) doesn't apply here.
+      await this.applyResource(
+        {
+          apiVersion: 'enterpriseagentgateway.solo.io/v1alpha1',
+          kind: 'EnterpriseAgentgatewayParameters',
+          metadata: { name: 'agentregistry-telemetry-https-params', namespace: this.namespace },
+          spec: { service: { spec: { loadBalancerSourceRanges: this.sourceRanges } } },
+        },
+        this.kubeContext
+      );
+      otelGatewaySpec.infrastructure = {
+        parametersRef: {
+          name: 'agentregistry-telemetry-https-params',
+          group: 'enterpriseagentgateway.solo.io',
+          kind: 'EnterpriseAgentgatewayParameters',
+        },
+      };
+    }
+
     await this.applyResource(
       {
         apiVersion: 'gateway.networking.k8s.io/v1',
         kind: 'Gateway',
         metadata: { name: 'agentregistry-telemetry-https', namespace: this.namespace },
-        spec: {
-          gatewayClassName: 'enterprise-agentgateway',
-          listeners: [
-            {
-              name: 'https',
-              port: 443,
-              protocol: 'HTTPS',
-              hostname: cfg.hostname,
-              tls: {
-                mode: 'Terminate',
-                certificateRefs: [{ name: cfg.tlsSecretName, kind: 'Secret' }],
-              },
-              allowedRoutes: { namespaces: { from: 'Same' } },
-            },
-          ],
-        },
+        spec: otelGatewaySpec,
       },
       this.kubeContext
     );
@@ -825,6 +855,12 @@ export class AgentregistryFeature extends AddonFeature {
       this.namespace,
       this.kubeContext
     );
+    await this.deleteResource(
+      'EnterpriseAgentgatewayParameters',
+      'agentregistry-telemetry-https-params',
+      this.namespace,
+      this.kubeContext
+    ).catch(() => {});
     await this.deleteResource(
       'Certificate',
       this.otelGateway.tlsSecretName,

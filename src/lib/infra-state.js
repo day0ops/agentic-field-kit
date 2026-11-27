@@ -75,6 +75,33 @@ export class InfraStateManager {
   }
 
   /**
+   * Resolve a single infra profile name, preferring an explicit one, then the
+   * active kubectl context, then the lone provisioned profile if there's
+   * exactly one. Returns null if none of those resolve unambiguously.
+   */
+  static async resolveInfraName(explicitProfile) {
+    if (explicitProfile) {
+      return explicitProfile;
+    }
+
+    const { kubeContext, matches } = await this.matchProfilesByKubeContext({
+      provisionedOnly: true,
+    });
+    if (matches.length === 1) {
+      Logger.info(`Auto-detected infra '${matches[0].name}' from kubectl context: ${kubeContext}`);
+      return matches[0].name;
+    }
+
+    const provisioned = (await this.listInfraProfiles()).filter(p => p.provisioned);
+    if (provisioned.length === 1) {
+      Logger.info(`Auto-detected provisioned infra: ${provisioned[0].name}`);
+      return provisioned[0].name;
+    }
+
+    return null;
+  }
+
+  /**
    * Resolve infra profile(s) for status display.
    * Prefers profiles whose cluster context matches the active kubectl context.
    * @param {string|null} explicitProfile

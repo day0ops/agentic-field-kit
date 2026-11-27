@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'fs';
 import { BaseProvisionerRunner } from './base.js';
 import { TerraformRunner, EnvFileWriter } from '../provisioner.js';
-import { Logger } from '../common.js';
+import { Logger, CommandRunner } from '../common.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,6 +13,13 @@ const ENVIRONMENTS_DIR = join(
   'cloud-provisioner',
   'terraform-cloud-provisioner',
   'environments'
+);
+const NODE_SLEEP_SCRIPT = join(
+  PROJECT_ROOT,
+  'cloud-provisioner',
+  'terraform-cloud-provisioner',
+  'scripts',
+  'eks-node-sleep.sh'
 );
 
 const PROVIDER_CONFIGS = {
@@ -67,6 +74,11 @@ const PROVIDER_CONFIGS = {
       if (config.team) vars.team = config.team;
       if (config.purpose) vars.purpose = config.purpose;
       if (config.kubernetesVersion) vars.kubernetes_version = config.kubernetesVersion;
+      if (config.enableNodeSleepSchedule !== undefined)
+        vars.enable_node_sleep_schedule = config.enableNodeSleepSchedule;
+      if (config.nodeSleepCron) vars.node_sleep_cron = config.nodeSleepCron;
+      if (config.nodeWakeCron) vars.node_wake_cron = config.nodeWakeCron;
+      if (config.nodeSleepTimezone) vars.node_sleep_timezone = config.nodeSleepTimezone;
       // DNS configuration for Route53
       if (dnsConfig?.provider === 'route53' && dnsConfig?.parentZone) {
         vars.enable_dns = true;
@@ -321,6 +333,62 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
   }
 
   /**
+   * On-demand worker node sleep/wake, independent of the Terraform-managed
+   * recurring schedule. Shells out to the submodule's eks-node-sleep.sh,
+   * auto-filling the wake min/max/desired and AWS profile/region from this
+   * profile's resolved config, and pointing it at this CLI's per-profile state
+   * file (which lives outside the environment directory the script defaults to).
+   */
+  async nodeSleep(action, options = {}) {
+    if (this.providerType !== 'eks') {
+      throw new Error(
+        `Node sleep is only supported for 'eks' profiles (got '${this.providerType}')`
+      );
+    }
+
+    if (!existsSync(this.stateFile)) {
+      throw new Error(
+        `No terraform state file found for '${this.profileName}'. Provision it first.`
+      );
+    }
+
+    const config = this.resolveConfiguration();
+
+    if (action === 'sleep' && config.minNodes !== 0) {
+      throw new Error(
+        `Cannot sleep '${this.profileName}': nodes.min is ${config.minNodes}, but AWS requires desired_capacity >= min_size. Set spec.settings.nodes.min: 0.`
+      );
+    }
+
+    const { clusterIndex, dryRun = false } = options;
+    const indices =
+      clusterIndex !== undefined ? [clusterIndex] : [...Array(config.clusterCount).keys()];
+
+    for (const index of indices) {
+      const args = [this.terraformDir, String(index), action];
+      if (action === 'wake') {
+        args.push(
+          '--min',
+          String(config.minNodes),
+          '--max',
+          String(config.maxNodes),
+          '--desired',
+          String(config.desiredNodes)
+        );
+      }
+      if (config.awsProfile) args.push('--profile', config.awsProfile);
+      if (config.region) args.push('--region', config.region);
+      if (dryRun) args.push('--dry-run');
+
+      this.logInfo(`${action === 'sleep' ? 'Sleeping' : 'Waking'} cluster index ${index}...`);
+      const result = await CommandRunner.run(NODE_SLEEP_SCRIPT, args, {
+        env: { TF_CLI_ARGS_output: `-state=${this.stateFile}` },
+      });
+      if (result.stdout) this.logInfo(result.stdout);
+    }
+  }
+
+  /**
    * Creates the Route53 NS delegation record pointing at a child zone hosted in this cloud's
    * own native DNS. Cloud-neutral and AWS-only -- this is the one place outside an EKS
    * environment (which owns both ends in the same cloud) that ever touches Route53.
@@ -461,6 +529,13 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
     const pc = this.providerConfig;
     const nodesCfg = provisioner.nodes || {};
     const desiredNodes = nodesCfg.desired ?? 2;
+    const minNodes = nodesCfg.min ?? Math.max(1, desiredNodes - 1);
+
+    if (provisioner.enable_node_sleep_schedule && minNodes !== 0) {
+      throw new Error(
+        `enable_node_sleep_schedule requires spec.settings.nodes.min: 0 (got ${minNodes})`
+      );
+    }
 
     return {
       owner: provisioner.owner || process.env.CLUSTER_OWNER,
@@ -472,12 +547,16 @@ export class TerraformCloudRunner extends BaseProvisionerRunner {
       clusterCount: this.clusters.length,
       desiredNodes,
       nodeType: nodesCfg.type || pc.defaultNodeType,
-      minNodes: nodesCfg.min ?? Math.max(1, desiredNodes - 1),
+      minNodes,
       maxNodes: nodesCfg.max ?? desiredNodes + 2,
       kubernetesVersion:
         provisioner.kubernetes_version || process.env.KUBERNETES_VERSION || undefined,
       enableDns64: provisioner.enable_dns64,
       enableBastion: provisioner.enable_bastion,
+      enableNodeSleepSchedule: provisioner.enable_node_sleep_schedule,
+      nodeSleepCron: provisioner.node_sleep_cron,
+      nodeWakeCron: provisioner.node_wake_cron,
+      nodeSleepTimezone: provisioner.node_sleep_timezone,
       privateNodes: nodesCfg.private,
       gkeProject:
         provisioner.project || (this.providerType === 'gke' ? process.env.GCP_PROJECT : undefined),

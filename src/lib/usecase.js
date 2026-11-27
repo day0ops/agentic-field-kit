@@ -256,42 +256,57 @@ export class UseCaseManager {
    * when no infra state exists at all (e.g. a cluster installed via a raw --context flag).
    */
   static async getCurrentUseCase() {
-    const contexts = await this.resolveTrackingConfigMapContexts();
-    const candidates = contexts.length > 0 ? contexts : [null];
+    // resolveTrackingConfigMapContexts() merges every provisioned profile's kubeconfig
+    // into process.env.KUBECONFIG as a side effect of discovery, leaving whichever
+    // profile it processed last as the new ambient current-context. Restore the
+    // caller's original value afterward so later unscoped kubectl calls (e.g.
+    // deployApplication(), which has no --context of its own) still target the
+    // caller's intended cluster instead of an arbitrary other provisioned one.
+    const originalKubeconfig = process.env.KUBECONFIG;
+    try {
+      const contexts = await this.resolveTrackingConfigMapContexts();
+      const candidates = contexts.length > 0 ? contexts : [null];
 
-    let anyReachable = false;
-    for (const context of candidates) {
-      const contextFlag = context ? `--context=${context}` : '';
-      const result = await KubernetesHelper.kubectl(
-        [
-          ...(contextFlag ? [contextFlag] : []),
-          'get',
-          'configmap',
-          TRACKING_CONFIGMAP,
-          '-n',
-          TRACKING_NAMESPACE,
-          '-o',
-          'jsonpath={.data.usecase}',
-          // Without this, a cluster with no tracked use case exits nonzero (NotFound) --
-          // indistinguishable from a genuinely unreachable cluster without inspecting
-          // stderr text. --ignore-not-found makes "reachable, nothing tracked" exit 0.
-          '--ignore-not-found',
-        ],
-        { ignoreError: true }
-      );
-      if (result.exitCode === 0) {
-        anyReachable = true;
-        const usecase = result.stdout.trim();
-        if (usecase) return usecase;
+      let anyReachable = false;
+      for (const context of candidates) {
+        const contextFlag = context ? `--context=${context}` : '';
+        const result = await KubernetesHelper.kubectl(
+          [
+            ...(contextFlag ? [contextFlag] : []),
+            'get',
+            'configmap',
+            TRACKING_CONFIGMAP,
+            '-n',
+            TRACKING_NAMESPACE,
+            '-o',
+            'jsonpath={.data.usecase}',
+            // Without this, a cluster with no tracked use case exits nonzero (NotFound) --
+            // indistinguishable from a genuinely unreachable cluster without inspecting
+            // stderr text. --ignore-not-found makes "reachable, nothing tracked" exit 0.
+            '--ignore-not-found',
+          ],
+          { ignoreError: true }
+        );
+        if (result.exitCode === 0) {
+          anyReachable = true;
+          const usecase = result.stdout.trim();
+          if (usecase) return usecase;
+        }
+      }
+
+      if (!anyReachable) {
+        throw new Error(
+          'Cannot reach the Kubernetes API on any provisioned cluster — check your kubeconfig/credentials (e.g. an expired AWS SSO session) before continuing.'
+        );
+      }
+      return null;
+    } finally {
+      if (originalKubeconfig === undefined) {
+        delete process.env.KUBECONFIG;
+      } else {
+        process.env.KUBECONFIG = originalKubeconfig;
       }
     }
-
-    if (!anyReachable) {
-      throw new Error(
-        'Cannot reach the Kubernetes API on any provisioned cluster — check your kubeconfig/credentials (e.g. an expired AWS SSO session) before continuing.'
-      );
-    }
-    return null;
   }
 
   /**
@@ -530,19 +545,30 @@ export class UseCaseManager {
   }
 
   /**
-   * Build a template context from spec.infra for {{env.*}} resolution in feature configs.
-   * Returns null if no infra or environment is resolvable.
+   * Build a template context for {{env.*}}/{{infra.*}} resolution in feature configs.
+   * Prefers spec.environment directly (bring-your-own cluster, no Terraform-provisioned
+   * infra -- same convention Profile already uses for its own spec.environment), falling
+   * back to deriving the environment from spec.infra's own infra profile. Returns null if
+   * neither is set or the environment isn't resolvable.
    */
-  static async buildTemplateContext(specInfra) {
-    if (!specInfra) return null;
+  static async buildTemplateContext(spec) {
+    if (!spec) return null;
     try {
-      const infraPath = join(PROJECT_ROOT, 'config', 'infra', `${specInfra}.yaml`);
-      if (!existsSync(infraPath)) return null;
-      const infraProfile = yaml.load(await readFile(infraPath, 'utf8'));
-      const envName = infraProfile?.spec?.environment;
-      if (!envName) return null;
-      const environment = await EnvironmentManager.load(envName);
-      const infraState = await InfraStateManager.load(specInfra);
+      let environment;
+      let infraState = null;
+      if (spec.environment) {
+        environment = await EnvironmentManager.load(spec.environment);
+      } else if (spec.infra) {
+        const infraPath = join(PROJECT_ROOT, 'config', 'infra', `${spec.infra}.yaml`);
+        if (!existsSync(infraPath)) return null;
+        const infraProfile = yaml.load(await readFile(infraPath, 'utf8'));
+        const envName = infraProfile?.spec?.environment;
+        if (!envName) return null;
+        environment = await EnvironmentManager.load(envName);
+        infraState = await InfraStateManager.load(spec.infra);
+      } else {
+        return null;
+      }
       return TemplateResolver.buildContext(
         { name: '', context: '', role: '' },
         environment,
@@ -671,7 +697,7 @@ export class UseCaseManager {
         await this.ensureKubeconfigsLoaded(spec.infra);
       }
 
-      const templateContext = await this.buildTemplateContext(spec.infra);
+      const templateContext = await this.buildTemplateContext(spec);
 
       // Record current use case before any deployment so cleanup works even if deployment fails
       await this.setCurrentUseCase(filePath);
@@ -818,7 +844,7 @@ export class UseCaseManager {
         await this.ensureKubeconfigsLoaded(spec.infra);
       }
 
-      const templateContext = await this.buildTemplateContext(spec.infra);
+      const templateContext = await this.buildTemplateContext(spec);
       const requiredApps = spec.requires?.applications || [];
       const specLevelClusters = spec.clusters || null;
       const specLevelInfra = spec.infra || null;
@@ -983,7 +1009,7 @@ export class UseCaseManager {
     if (usecase.spec?.infra) {
       await this.ensureKubeconfigsLoaded(usecase.spec.infra);
     }
-    const templateContext = await this.buildTemplateContext(usecase.spec?.infra);
+    const templateContext = await this.buildTemplateContext(usecase.spec);
     const resolved = templateContext
       ? { ...usecase, spec: TemplateResolver.resolveValues(usecase.spec, templateContext) }
       : usecase;
